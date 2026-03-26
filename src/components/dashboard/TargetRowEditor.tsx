@@ -9,6 +9,7 @@ import type {
   TikTokAccount,
 } from "@/lib/types";
 import { CreatorPicker } from "@/components/dashboard/CreatorPicker";
+import { OptionalNonNegIntInput } from "@/components/dashboard/OptionalNonNegIntInput";
 
 const inputClass =
   "h-10 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-foreground outline-none transition focus:border-neon-cyan/55 focus:ring-2 focus:ring-neon-cyan/20";
@@ -68,14 +69,14 @@ export function TargetRowEditor({
 
       <div className="md:col-span-2">
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Project
+          Campaign
         </label>
         <select
           className={inputClass}
           value={row.projectId}
           onChange={(e) => patch({ projectId: e.target.value })}
         >
-          <option value="">Select…</option>
+          <option value="">Select campaign…</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -140,14 +141,10 @@ export function TargetRowEditor({
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
           Target
         </label>
-        <input
-          type="number"
-          min={0}
+        <OptionalNonNegIntInput
           className={inputClass}
           value={row.targetVideos}
-          onChange={(e) =>
-            patch({ targetVideos: Number(e.target.value) || 0 })
-          }
+          onCommit={(n) => patch({ targetVideos: n })}
         />
       </div>
 
@@ -155,14 +152,10 @@ export function TargetRowEditor({
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
           Incentive / vid
         </label>
-        <input
-          type="number"
-          min={0}
+        <OptionalNonNegIntInput
           className={inputClass}
           value={row.incentivePerVideo}
-          onChange={(e) =>
-            patch({ incentivePerVideo: Number(e.target.value) || 0 })
-          }
+          onCommit={(n) => patch({ incentivePerVideo: n })}
         />
       </div>
 

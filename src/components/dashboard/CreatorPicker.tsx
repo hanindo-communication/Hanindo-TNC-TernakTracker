@@ -35,16 +35,12 @@ export function CreatorPicker({
           <span className="flex min-w-0 items-center gap-2">
             {selected ? (
               <>
-                <span className="relative h-7 w-7 shrink-0 overflow-hidden rounded-full border border-neon-cyan/25">
-                  <Image
-                    src={selected.avatarUrl}
-                    alt=""
-                    width={28}
-                    height={28}
-                    className="object-cover"
-                    unoptimized
-                  />
-                </span>
+                <CreatorAvatarThumb
+                  name={selected.name}
+                  avatarUrl={selected.avatarUrl}
+                  size={28}
+                  frameClassName="h-7 w-7 border-neon-cyan/25"
+                />
                 <span className="truncate">{selected.name}</span>
               </>
             ) : (
@@ -75,16 +71,12 @@ export function CreatorPicker({
                   }}
                   className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm aria-selected:bg-neon-cyan/10"
                 >
-                  <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full border border-white/10">
-                    <Image
-                      src={c.avatarUrl}
-                      alt=""
-                      width={32}
-                      height={32}
-                      className="object-cover"
-                      unoptimized
-                    />
-                  </span>
+                  <CreatorAvatarThumb
+                    name={c.name}
+                    avatarUrl={c.avatarUrl}
+                    size={32}
+                    frameClassName="h-8 w-8 border-white/10"
+                  />
                   <span className="min-w-0 flex-1 truncate">{c.name}</span>
                   {value === c.id ? (
                     <Check className="h-4 w-4 text-neon-cyan" />
@@ -96,5 +88,46 @@ export function CreatorPicker({
         </Command>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function CreatorAvatarThumb({
+  name,
+  avatarUrl,
+  size,
+  frameClassName,
+}: {
+  name: string;
+  avatarUrl: string;
+  size: number;
+  frameClassName: string;
+}) {
+  const src = (avatarUrl ?? "").trim();
+  const hasAvatar = src.length > 0;
+  return (
+    <span
+      className={cn(
+        "relative shrink-0 overflow-hidden rounded-full border",
+        frameClassName,
+      )}
+    >
+      {hasAvatar ? (
+        <Image
+          src={src}
+          alt={name}
+          width={size}
+          height={size}
+          className="object-cover"
+          unoptimized
+        />
+      ) : (
+        <span
+          className="flex h-full w-full items-center justify-center bg-gradient-to-br from-neon-cyan/20 to-neon-purple/20 text-[10px] font-bold text-foreground/80"
+          aria-hidden
+        >
+          {(name.trim().slice(0, 1) || "?").toUpperCase()}
+        </span>
+      )}
+    </span>
   );
 }

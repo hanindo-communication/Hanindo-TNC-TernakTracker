@@ -29,6 +29,26 @@ function getCursorPreferenceServerSnapshot() {
   return false;
 }
 
+const AUTH_REQUEST_TIMEOUT_MS = 35_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const id = window.setTimeout(
+      () => reject(new Error("timeout")),
+      ms,
+    );
+    promise
+      .then((v) => {
+        window.clearTimeout(id);
+        resolve(v);
+      })
+      .catch((e) => {
+        window.clearTimeout(id);
+        reject(e);
+      });
+  });
+}
+
 export function LoginForm({ initialError }: { initialError?: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -76,37 +96,65 @@ export function LoginForm({ initialError }: { initialError?: string }) {
     setMessage(null);
 
     if (mode === "login") {
-      const { error } = await supabase.auth.signInWithPassword({
+      try {
+        const { error } = await withTimeout(
+          supabase.auth.signInWithPassword({
+            email,
+            password,
+          }),
+          AUTH_REQUEST_TIMEOUT_MS,
+        );
+        if (error) {
+          setMessage(error.message);
+          return;
+        }
+        router.push("/");
+        router.refresh();
+      } catch (e) {
+        const msg =
+          e instanceof Error && e.message === "timeout"
+            ? "Permintaan login timeout. Cek koneksi internet, VPN/firewall, dan NEXT_PUBLIC_SUPABASE_URL di .env.local."
+            : e instanceof Error
+              ? e.message
+              : "Gagal login.";
+        setMessage(msg);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    try {
+    const { data, error } = await withTimeout(
+      supabase.auth.signUp({
         email,
         password,
-      });
-      setLoading(false);
+      }),
+      AUTH_REQUEST_TIMEOUT_MS,
+    );
       if (error) {
         setMessage(error.message);
         return;
       }
-      router.push("/");
-      router.refresh();
-      return;
+      if (data.session) {
+        router.push("/");
+        router.refresh();
+        return;
+      }
+      setMessage(
+        "Akun dibuat. Silakan tab Login dan masuk dengan email & password Anda.",
+      );
+    } catch (e) {
+      const msg =
+        e instanceof Error && e.message === "timeout"
+          ? "Permintaan daftar timeout. Cek koneksi dan pengaturan Supabase."
+          : e instanceof Error
+            ? e.message
+            : "Gagal mendaftar.";
+      setMessage(msg);
+    } finally {
+      setLoading(false);
     }
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-    setLoading(false);
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-    if (data.session) {
-      router.push("/");
-      router.refresh();
-      return;
-    }
-    setMessage(
-      "Akun dibuat. Silakan tab Login dan masuk dengan email & password Anda.",
-    );
   }
 
   return (

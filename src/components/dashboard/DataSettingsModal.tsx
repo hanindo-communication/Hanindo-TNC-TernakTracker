@@ -24,11 +24,7 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
-import {
-  normalizeBrandTableSegment,
-  TABLE_SEGMENT_ASSIGN_OPTIONS,
-} from "@/lib/dashboard/table-segments";
-import type { TableSegmentId } from "@/lib/types";
+import { normalizeBrandTableSegment } from "@/lib/dashboard/table-segments";
 
 const inputClass =
   "h-9 w-full min-w-0 rounded-md border border-white/10 bg-white/[0.04] px-2 text-sm text-foreground outline-none transition focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
@@ -193,16 +189,16 @@ export function DataSettingsModal({
         toast.error("Brand", { description: "Semua brand harus punya nama." });
         return;
       }
-      if (b.tableSegmentId !== "tnc" && b.tableSegmentId !== "folo") {
-        toast.error("Table", {
-          description: `Brand "${b.name.trim()}" perlu dipilih Table (TNC Hanindo atau FOLO).`,
-        });
-        return;
-      }
     }
     for (const p of d.projects) {
       if (!p.name.trim()) {
-        toast.error("Project", { description: "Semua project harus punya nama." });
+        toast.error("Campaign", { description: "Semua campaign harus punya nama." });
+        return;
+      }
+      if (!p.brandId?.trim()) {
+        toast.error("Campaign", {
+          description: `Campaign "${p.name.trim()}" harus memilih brand.`,
+        });
         return;
       }
     }
@@ -251,7 +247,7 @@ export function DataSettingsModal({
         <DialogHeader className="shrink-0 border-b border-white/10 px-5 py-4 sm:px-6">
           <DialogTitle className="text-lg">Data settings</DialogTitle>
           <DialogDescription className="text-sm text-muted">
-            Kelola daftar brand, project, creator, dan akun TikTok untuk form{" "}
+            Kelola daftar brand, campaign, creator, dan akun TikTok untuk form{" "}
             <span className="text-foreground/90">Submit Targets</span>. Perubahan
             disimpan di browser lalu di-push ke workspace bersama (Supabase).
           </DialogDescription>
@@ -290,27 +286,6 @@ export function DataSettingsModal({
                       });
                     }}
                   />
-                  <select
-                    className={cn(inputClass, "w-full min-w-[200px] sm:w-[220px]")}
-                    value={b.tableSegmentId}
-                    onChange={(e) => {
-                      const seg = e.target.value as TableSegmentId;
-                      setDraft((prev) => {
-                        const nb = [...prev.brands];
-                        const cur = nb[i];
-                        if (!cur) return prev;
-                        nb[i] = { ...cur, tableSegmentId: seg };
-                        return { ...prev, brands: nb };
-                      });
-                    }}
-                    aria-label={`Table untuk brand ${i + 1}`}
-                  >
-                    {TABLE_SEGMENT_ASSIGN_OPTIONS.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
                   <button
                     type="button"
                     className="shrink-0 rounded-md border border-white/10 px-2 text-xs text-muted hover:border-red-400/40 hover:text-red-300"
@@ -349,7 +324,7 @@ export function DataSettingsModal({
 
           <section className="mb-6">
             <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
-              Projects
+              Campaigns
             </h4>
             <div className="space-y-2">
               {draft.projects.map((p, i) => (
@@ -357,7 +332,7 @@ export function DataSettingsModal({
                   <CommittedTextInput
                     className="min-w-[140px] flex-1"
                     value={p.name}
-                    placeholder="Nama project"
+                    placeholder="Nama campaign"
                     registerFlush={registerFlush}
                     onCommit={(next) => {
                       setDraft((prev) => {
@@ -417,7 +392,7 @@ export function DataSettingsModal({
                   })
                 }
               >
-                + Project
+                + Campaign
               </button>
             </div>
           </section>

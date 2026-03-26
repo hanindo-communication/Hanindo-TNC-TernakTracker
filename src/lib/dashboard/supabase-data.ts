@@ -13,11 +13,17 @@ import type {
   Project,
   TikTokAccount,
 } from "@/lib/types";
+import { syncDerivedFinancials } from "@/lib/dashboard/merge-targets";
+import { normalizeTargetTableSegmentForKey } from "@/lib/types";
 
 function num(v: unknown): number {
   if (v == null) return 0;
   if (typeof v === "number") return v;
   return Number(v);
+}
+
+function parseTargetTableSegment(raw: string | null | undefined): string {
+  return normalizeTargetTableSegmentForKey(raw ?? "");
 }
 
 export interface DashboardBundle {
@@ -215,25 +221,30 @@ export async function fetchDashboardData(
     label: r.label as string,
   }));
 
-  const targets: CreatorTarget[] = (targetRows ?? []).map((r) => ({
-    id: r.id as string,
-    creatorId: r.creator_id as string,
-    projectId: r.project_id as string,
-    campaignObjectiveId: r.campaign_objective_id as string,
-    creatorType: r.creator_type as CreatorTarget["creatorType"],
-    tiktokAccountId: r.tiktok_account_id as string,
-    month: r.month as string,
-    targetVideos: num(r.target_videos),
-    submittedVideos: num(r.submitted_videos),
-    incentivePerVideo: num(r.incentive_per_video),
-    basePay: num(r.base_pay),
-    expectedRevenue: num(r.expected_revenue),
-    actualRevenue: num(r.actual_revenue),
-    incentives: num(r.incentives),
-    reimbursements: num(r.reimbursements),
-    expectedProfit: num(r.expected_profit),
-    actualProfit: num(r.actual_profit),
-  }));
+  const targets: CreatorTarget[] = (targetRows ?? []).map((r) =>
+    syncDerivedFinancials({
+      id: r.id as string,
+      creatorId: r.creator_id as string,
+      projectId: r.project_id as string,
+      campaignObjectiveId: r.campaign_objective_id as string,
+      creatorType: r.creator_type as CreatorTarget["creatorType"],
+      tiktokAccountId: r.tiktok_account_id as string,
+      month: r.month as string,
+      tableSegmentId: parseTargetTableSegment(
+        (r as { table_segment?: string | null }).table_segment,
+      ),
+      targetVideos: num(r.target_videos),
+      submittedVideos: num(r.submitted_videos),
+      incentivePerVideo: num(r.incentive_per_video),
+      basePay: num(r.base_pay),
+      expectedRevenue: 0,
+      actualRevenue: num(r.actual_revenue),
+      incentives: 0,
+      reimbursements: num(r.reimbursements),
+      expectedProfit: 0,
+      actualProfit: 0,
+    }),
+  );
 
   return {
     organizations,
@@ -260,6 +271,7 @@ async function persistTargetsOnce(
   targets: CreatorTarget[],
 ): Promise<void> {
   const rows = targets.map((t) => ({
+    id: t.id,
     user_id: SHARED_DASHBOARD_USER_ID,
     creator_id: t.creatorId,
     project_id: t.projectId,
@@ -267,6 +279,7 @@ async function persistTargetsOnce(
     creator_type: t.creatorType,
     tiktok_account_id: t.tiktokAccountId,
     month: t.month,
+    table_segment: parseTargetTableSegment(t.tableSegmentId),
     target_videos: t.targetVideos,
     submitted_videos: t.submittedVideos,
     incentive_per_video: t.incentivePerVideo,
@@ -280,9 +293,9 @@ async function persistTargetsOnce(
     updated_at: new Date().toISOString(),
   }));
 
+  /** Primary-key upsert so mengganti Table (table_segment) memperbarui baris yang sama, bukan menambah duplikat. */
   const { error } = await supabase.from("creator_targets").upsert(rows, {
-    onConflict:
-      "user_id,creator_id,project_id,campaign_objective_id,tiktok_account_id,month",
+    onConflict: "id",
   });
   if (error) throw error;
 }

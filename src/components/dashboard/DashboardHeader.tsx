@@ -8,6 +8,7 @@ import {
   Settings2,
   Sparkles,
   Target,
+  Upload,
   User,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -26,6 +27,9 @@ interface DashboardHeaderProps {
   creatorOptions: { id: string; name: string }[];
   brandOptions: { id: string; name: string }[];
   onSubmitTargets: () => void;
+  /** Tampil jika minimal satu campaign terpilih untuk submit video. */
+  showSubmitVideos?: boolean;
+  onSubmitVideos?: () => void;
   onOverview: () => void;
   onDataSettings: () => void;
   userEmail?: string | null;
@@ -40,6 +44,8 @@ export function DashboardHeader({
   creatorOptions,
   brandOptions,
   onSubmitTargets,
+  showSubmitVideos = false,
+  onSubmitVideos,
   onOverview,
   onDataSettings,
   userEmail,
@@ -97,7 +103,7 @@ export function DashboardHeader({
           <button
             type="button"
             onClick={onOverview}
-            className="btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-neon-cyan/35 bg-neon-cyan/10 px-5 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/20 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50"
+            className="action-glow-hover btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-neon-cyan/35 bg-neon-cyan/10 px-5 text-sm font-semibold text-neon-cyan hover:bg-neon-cyan/20 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50"
           >
             <LayoutDashboard className="h-4 w-4" />
             Overview
@@ -106,11 +112,22 @@ export function DashboardHeader({
           <button
             type="button"
             onClick={onDataSettings}
-            className="btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.05] px-5 text-sm font-semibold text-foreground transition hover:border-neon-purple/35 hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-neon-purple/30"
+            className="action-glow-hover btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.05] px-5 text-sm font-semibold text-foreground hover:border-neon-purple/35 hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-neon-purple/30"
           >
             <Settings2 className="h-4 w-4" />
             Data settings
           </button>
+
+          {showSubmitVideos && onSubmitVideos ? (
+            <button
+              type="button"
+              onClick={onSubmitVideos}
+              className="btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-neon-cyan/45 bg-neon-cyan/12 px-5 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/20 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50"
+            >
+              <Upload className="h-4 w-4" />
+              Submit Videos
+            </button>
+          ) : null}
 
           <button
             type="button"

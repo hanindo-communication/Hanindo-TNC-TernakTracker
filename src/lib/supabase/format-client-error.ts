@@ -31,6 +31,20 @@ function extractParts(e: unknown): {
   return { message: String(e) };
 }
 
+/** Untuk console.warn (bukan console.error) — hindari overlay error Next.js dev. */
+export function supabaseErrorDebugPayload(e: unknown): Record<string, unknown> {
+  if (e != null && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    return {
+      message: o.message,
+      code: o.code,
+      details: o.details,
+      hint: o.hint,
+    };
+  }
+  return { value: String(e) };
+}
+
 export function formatSupabaseClientError(e: unknown): string {
   const { message, details, hint, code } = extractParts(e);
   const lower = message.toLowerCase();
@@ -38,10 +52,23 @@ export function formatSupabaseClientError(e: unknown): string {
 
   if (
     lower.includes("table_segment") &&
-    (lower.includes("does not exist") || lower.includes("column"))
+    (lower.includes("does not exist") ||
+      lower.includes("column") ||
+      lower.includes("schema cache"))
   ) {
+    const mentionsCreatorTargets =
+      lower.includes("creator_targets") ||
+      lower.includes("creator targets");
+    if (mentionsCreatorTargets) {
+      return [
+        "Kolom creator_targets.table_segment belum ada (diperlukan untuk simpan kolom Table di Edit target).",
+        "Buka Supabase → SQL Editor: jalankan urutan supabase/migrations/005_creator_targets_table_segment.sql lalu 006_creator_targets_unique_table_segment.sql, akhiri dengan NOTIFY pgrst, 'reload schema';",
+        "Jika Data settings gagal sinkron brand: jalankan juga 003_brands_table_segment.sql.",
+        "Detail: cursor-docs/supabase-setup.md.",
+      ].join(" ");
+    }
     return [
-      "Kolom brands.table_segment belum ada di database (diperlukan untuk Simpan & sinkron).",
+      "Kolom brands.table_segment belum ada di database (diperlukan untuk Simpan & sinkron Data settings / brand).",
       "Buka Supabase → SQL Editor, jalankan supabase/migrations/003_brands_table_segment.sql lalu: NOTIFY pgrst, 'reload schema';",
       "Detail: cursor-docs/supabase-setup.md.",
     ].join(" ");

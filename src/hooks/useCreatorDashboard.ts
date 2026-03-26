@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   ensureWorkspaceDefaults,
@@ -9,17 +9,36 @@ import {
   seedDemoData,
   type DashboardBundle,
 } from "@/lib/dashboard/supabase-data";
-import { mergeTargetForms } from "@/lib/dashboard/merge-targets";
+import {
+  applySubmittedVideosDelta,
+  applyTargetRowEdit,
+  mergeTargetForms,
+  type CreatorTargetRowSave,
+} from "@/lib/dashboard/merge-targets";
 import { createClient } from "@/lib/supabase/client";
-import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
+import {
+  formatSupabaseClientError,
+  supabaseErrorDebugPayload,
+} from "@/lib/supabase/format-client-error";
 import { withPostgrestSchemaRetry } from "@/lib/supabase/postgrest-retry";
-import type {
-  CreatorTarget,
-  DashboardFilters,
-  QuickFilter,
-  TargetFormRow,
-  TargetStatus,
+import {
+  TABLE_CHIP_OPTIONS,
+  targetMatchesTableQuickFilter,
+} from "@/lib/dashboard/table-segments";
+import {
+  normalizeTargetTableSegmentForKey,
+  type Brand,
+  type CreatorTarget,
+  type DashboardFilters,
+  type QuickFilter,
+  type TargetFormRow,
+  type TargetStatus,
 } from "@/lib/types";
+
+function labelTableSegment(raw: string): string {
+  const seg = normalizeTargetTableSegmentForKey(raw);
+  return TABLE_CHIP_OPTIONS.find((o) => o.id === seg)?.label ?? seg;
+}
 
 export interface AggregatedCreatorRow {
   creatorId: string;
@@ -36,9 +55,19 @@ export interface AggregatedCreatorRow {
 
 export interface BreakdownRow {
   targetId: string;
+  creatorId: string;
   projectId: string;
   projectName: string;
+  /** Segmen meja dari Submit Targets (All / TNC / FOLO). */
+  tableSegmentLabel: string;
+  tableSegmentId: string;
+  basePay: number;
+  incentivePerVideo: number;
+  campaignObjectiveId: string;
   campaignLabel: string;
+  creatorType: CreatorTarget["creatorType"];
+  tiktokAccountId: string;
+  month: string;
   targetVideos: number;
   submittedVideos: number;
   expectedRevenue: number;
@@ -64,11 +93,26 @@ function computeStatus(submitted: number, target: number): TargetStatus {
   return "on_track";
 }
 
+/** Jumlah expected revenue per nilai segmen meja (all | tnc | folo). */
+function sumExpectedRevenueForTableSegment(
+  list: CreatorTarget[],
+  segment: "all" | "tnc" | "folo",
+): number {
+  return sum(
+    list
+      .filter(
+        (t) => normalizeTargetTableSegmentForKey(t.tableSegmentId) === segment,
+      )
+      .map((t) => t.expectedRevenue),
+  );
+}
+
 export function useCreatorDashboard() {
   const supabase = useMemo(() => createClient(), []);
 
   const [bundle, setBundle] = useState<DashboardBundle | null>(null);
   const [loading, setLoading] = useState(true);
+  const loadGenerationRef = useRef(0);
 
   const [selectedMonth, setSelectedMonth] = useState<string>("2026-03");
   const [filters, setFilters] = useState<DashboardFilters>({
@@ -78,18 +122,36 @@ export function useCreatorDashboard() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
 
   const load = useCallback(async () => {
+    const gen = ++loadGenerationRef.current;
     setLoading(true);
     try {
       const d = await withPostgrestSchemaRetry(supabase, async () => {
         await ensureWorkspaceDefaults(supabase);
         return fetchDashboardData(supabase);
       });
+      if (gen !== loadGenerationRef.current) return;
       setBundle(d);
+      toast.dismiss("creator-dashboard-load");
     } catch (e) {
-      console.error(e);
+      if (gen !== loadGenerationRef.current) return;
+      const description = formatSupabaseClientError(e);
+      toast.error("Gagal memuat data workspace", {
+        id: "creator-dashboard-load",
+        description,
+        duration: 14_000,
+      });
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          "[useCreatorDashboard.load]",
+          description,
+          supabaseErrorDebugPayload(e),
+        );
+      }
       setBundle(null);
     } finally {
-      setLoading(false);
+      if (gen === loadGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, [supabase]);
 
@@ -110,9 +172,8 @@ export function useCreatorDashboard() {
     [targets, selectedMonth],
   );
 
-  const filteredLeafTargets = useMemo(() => {
+  const targetsAfterDashboardFilters = useMemo(() => {
     let list = monthTargets;
-
     if (filters.creatorId !== "all") {
       list = list.filter((t) => t.creatorId === filters.creatorId);
     }
@@ -122,20 +183,22 @@ export function useCreatorDashboard() {
       );
       list = list.filter((t) => pids.has(t.projectId));
     }
+    return list;
+  }, [monthTargets, filters, projects]);
 
-    if (quickFilter !== "all") {
-      const brandIdsInSegment = new Set(
-        brands
-          .filter((b) => b.tableSegmentId === quickFilter)
-          .map((b) => b.id),
-      );
-      const pids = new Set(
-        projects
-          .filter((p) => brandIdsInSegment.has(p.brandId))
-          .map((p) => p.id),
-      );
-      list = list.filter((t) => pids.has(t.projectId));
-    }
+  /** Baris segmen "All" (belum ditugaskan ke meja TNC/FOLO) — tidak ikut chip gabungan. */
+  const unassignedTableSegmentTargetCount = useMemo(
+    () =>
+      targetsAfterDashboardFilters.filter(
+        (t) => normalizeTargetTableSegmentForKey(t.tableSegmentId) === "all",
+      ).length,
+    [targetsAfterDashboardFilters],
+  );
+
+  const filteredLeafTargets = useMemo(() => {
+    let list = targetsAfterDashboardFilters.filter((t) =>
+      targetMatchesTableQuickFilter(quickFilter, t.tableSegmentId),
+    );
 
     const byCreator = new Map<string, CreatorTarget[]>();
     for (const t of list) {
@@ -150,7 +213,7 @@ export function useCreatorDashboard() {
     });
 
     return { byCreator, visibleCreatorIds: creatorIds };
-  }, [monthTargets, filters, quickFilter, creators, projects, brands]);
+  }, [targetsAfterDashboardFilters, quickFilter, creators]);
 
   const creatorRows: AggregatedCreatorRow[] = useMemo(() => {
     const { byCreator, visibleCreatorIds } = filteredLeafTargets;
@@ -185,9 +248,18 @@ export function useCreatorDashboard() {
         );
         return {
           targetId: t.id,
+          creatorId: t.creatorId,
           projectId: t.projectId,
           projectName: p?.name ?? t.projectId,
+          tableSegmentLabel: labelTableSegment(t.tableSegmentId),
+          tableSegmentId: t.tableSegmentId,
+          basePay: t.basePay,
+          incentivePerVideo: t.incentivePerVideo,
+          campaignObjectiveId: t.campaignObjectiveId,
           campaignLabel: camp?.label ?? t.campaignObjectiveId,
+          creatorType: t.creatorType,
+          tiktokAccountId: t.tiktokAccountId,
+          month: t.month,
           targetVideos: t.targetVideos,
           submittedVideos: t.submittedVideos,
           expectedRevenue: t.expectedRevenue,
@@ -252,6 +324,76 @@ export function useCreatorDashboard() {
     [supabase, load],
   );
 
+  const handleUpdateTargetRows = useCallback(
+    async (updates: CreatorTargetRowSave[]) => {
+      if (updates.length === 0) return;
+      const byId = new Map(updates.map((u) => [u.targetId, u]));
+
+      let nextTargets: CreatorTarget[] | undefined;
+      setBundle((prev) => {
+        if (!prev) return prev;
+        nextTargets = prev.targets.map((t) => {
+          const u = byId.get(t.id);
+          if (!u) return t;
+          return applyTargetRowEdit(t, {
+            targetVideos: u.targetVideos,
+            tableSegmentId: u.tableSegmentId,
+            basePay: u.basePay,
+            incentivePerVideo: u.incentivePerVideo,
+          });
+        });
+        return { ...prev, targets: nextTargets };
+      });
+
+      if (!nextTargets) return;
+
+      try {
+        await persistTargets(supabase, nextTargets);
+        toast.success("Target berhasil disimpan");
+        await load();
+      } catch (e) {
+        toast.error(formatSupabaseClientError(e));
+        await load();
+      }
+    },
+    [supabase, load],
+  );
+
+  const handleSubmitVideoUrls = useCallback(
+    async (deltas: { targetId: string; addVideos: number }[]) => {
+      const byId = new Map<string, number>();
+      for (const d of deltas) {
+        const add = Math.max(0, Math.floor(Number(d.addVideos)) || 0);
+        if (add <= 0) continue;
+        byId.set(d.targetId, (byId.get(d.targetId) ?? 0) + add);
+      }
+      if (byId.size === 0) return;
+
+      let nextTargets: CreatorTarget[] | undefined;
+      setBundle((prev) => {
+        if (!prev) return prev;
+        nextTargets = prev.targets.map((t) => {
+          const add = byId.get(t.id);
+          if (add === undefined || add <= 0) return t;
+          return applySubmittedVideosDelta(t, add);
+        });
+        return { ...prev, targets: nextTargets };
+      });
+
+      if (!nextTargets) return;
+
+      try {
+        await persistTargets(supabase, nextTargets);
+        toast.success("Video submissions berhasil disimpan");
+        await load();
+      } catch (e) {
+        toast.error(formatSupabaseClientError(e));
+        await load();
+      }
+    },
+    [supabase, load],
+  );
+
   const seedIfEmpty = useCallback(async () => {
     try {
       await seedDemoData(supabase);
@@ -262,19 +404,25 @@ export function useCreatorDashboard() {
   }, [supabase, load]);
 
   const overviewStats = useMemo(() => {
-    if (!totalRow) {
-      return {
-        targetRevenue: 0,
-        actualRevenue: 0,
-        percentageShare: null as number | null,
-      };
-    }
-    const targetRevenue = totalRow.expectedRevenue;
-    const actualRevenue = totalRow.actualRevenue;
-    const percentageShare =
-      targetRevenue > 0 ? (actualRevenue / targetRevenue) * 100 : null;
-    return { targetRevenue, actualRevenue, percentageShare };
-  }, [totalRow]);
+    const base = targetsAfterDashboardFilters;
+    const tncSegmentRevenue = sumExpectedRevenueForTableSegment(base, "tnc");
+    const foloSegmentRevenue = sumExpectedRevenueForTableSegment(base, "folo");
+    const allSegmentRevenue = sumExpectedRevenueForTableSegment(base, "all");
+    const targetRevenue =
+      tncSegmentRevenue + foloSegmentRevenue + allSegmentRevenue;
+    /** 50% total revenue TNC + 100% total revenue FOLO (expected revenue per segmen). */
+    const actualRevenue = 0.5 * tncSegmentRevenue + foloSegmentRevenue;
+    /** 15% × total revenue TNC Hanindo Ternak. */
+    const hanindoSharingTotal = tncSegmentRevenue * 0.15;
+    return {
+      targetRevenue,
+      actualRevenue,
+      hanindoSharingTotal,
+      tncSegmentRevenue,
+      foloSegmentRevenue,
+      allSegmentRevenue,
+    };
+  }, [targetsAfterDashboardFilters]);
 
   return {
     creators,
@@ -290,11 +438,14 @@ export function useCreatorDashboard() {
     setFilters,
     quickFilter,
     setQuickFilter,
+    unassignedTableSegmentTargetCount,
     creatorRows,
     breakdownByCreator,
     totalRow,
     hasRows: creatorRows.length > 0,
     handleSubmitTargets,
+    handleUpdateTargetRows,
+    handleSubmitVideoUrls,
     loading,
     overviewStats,
     reload: load,

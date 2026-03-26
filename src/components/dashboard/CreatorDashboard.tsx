@@ -1,19 +1,23 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   TABLE_CHIP_OPTIONS,
   TABLE_SEGMENT_ALL_ID,
 } from "@/lib/dashboard/table-segments";
 import type { User } from "@supabase/supabase-js";
 import { CreatorDetailDrawer } from "@/components/dashboard/CreatorDetailDrawer";
-import { DataSettingsModal } from "@/components/dashboard/DataSettingsModal";
+import { DashboardAtmosphere } from "@/components/dashboard/DashboardAtmosphere";
+import { DashboardCommandMenu } from "@/components/dashboard/DashboardCommandMenu";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
+import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton";
+import { DataSettingsModal } from "@/components/dashboard/DataSettingsModal";
 import { OverviewModal } from "@/components/dashboard/OverviewModal";
 import { PerformanceTable } from "@/components/dashboard/PerformanceTable";
 import { QuickFilterChips } from "@/components/dashboard/QuickFilterChips";
 import { SubmitTargetsModal } from "@/components/dashboard/SubmitTargetsModal";
+import { SubmitVideosModal } from "@/components/dashboard/SubmitVideosModal";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCreatorDashboard } from "@/hooks/useCreatorDashboard";
 import { useFormSettings } from "@/hooks/useFormSettings";
@@ -31,12 +35,46 @@ export function CreatorDashboard() {
   const router = useRouter();
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const sessionResolvedRef = useRef(false);
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setUser(data.user ?? null);
+    let cancelled = false;
+    sessionResolvedRef.current = false;
+
+    const fallbackMs = 25_000;
+    const fallbackId = window.setTimeout(() => {
+      if (!cancelled && !sessionResolvedRef.current) {
+        sessionResolvedRef.current = true;
+        setUser(null);
+        setAuthReady(true);
+      }
+    }, fallbackMs);
+
+    const finish = (u: User | null) => {
+      if (cancelled) return;
+      window.clearTimeout(fallbackId);
+      sessionResolvedRef.current = true;
+      setUser(u);
       setAuthReady(true);
+    };
+
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => finish(session?.user ?? null))
+      .catch(() => finish(null));
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      window.clearTimeout(fallbackId);
+      finish(session?.user ?? null);
     });
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fallbackId);
+      subscription.unsubscribe();
+    };
   }, [supabase]);
 
   const signOut = useCallback(async () => {
@@ -47,8 +85,23 @@ export function CreatorDashboard() {
 
   if (!authReady) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted">
-        Memuat sesi…
+      <div className="relative min-h-screen overflow-x-hidden">
+        <div className="app-bg-grid" aria-hidden />
+        <div className="app-bg-noise" aria-hidden />
+        <div
+          className="pointer-events-none fixed inset-0 animate-gradient-bg opacity-70"
+          aria-hidden
+        />
+        <div className="relative z-10 flex min-h-screen items-center justify-center px-4">
+          <div className="glass-panel w-full max-w-md space-y-4 rounded-2xl p-8">
+            <div className="h-5 w-44 rounded-lg skeleton-shimmer" />
+            <div className="h-3 w-full rounded skeleton-shimmer" />
+            <div className="h-3 w-4/5 max-w-sm rounded skeleton-shimmer" />
+            <p className="pt-2 text-center text-xs text-muted">
+              Memuat sesi…
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -81,11 +134,16 @@ function CreatorDashboardInner({
     setFilters,
     quickFilter,
     setQuickFilter,
+    unassignedTableSegmentTargetCount,
     creatorRows,
     breakdownByCreator,
     totalRow,
     hasRows,
     handleSubmitTargets,
+    handleUpdateTargetRows,
+    handleSubmitVideoUrls,
+    targets,
+    campaignObjectives,
     loading,
     overviewStats,
     seedIfEmpty,
@@ -130,6 +188,70 @@ function CreatorDashboardInner({
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerCreatorId, setDrawerCreatorId] = useState<string | null>(null);
+  const [videoSubmitTargetIds, setVideoSubmitTargetIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [videosModalOpen, setVideosModalOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const toggleVideoSubmitTarget = useCallback(
+    (targetId: string, selected: boolean) => {
+      setVideoSubmitTargetIds((prev) => {
+        const next = new Set(prev);
+        if (selected) next.add(targetId);
+        else next.delete(targetId);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const toggleAllVideoSubmitTargets = useCallback(
+    (targetIds: string[], selected: boolean) => {
+      setVideoSubmitTargetIds((prev) => {
+        const next = new Set(prev);
+        for (const id of targetIds) {
+          if (selected) next.add(id);
+          else next.delete(id);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const openSubmitVideosForCreator = useCallback(
+    (creatorId: string) => {
+      const ids = breakdownByCreator(creatorId).map((b) => b.targetId);
+      setVideoSubmitTargetIds(new Set(ids));
+      setVideosModalOpen(true);
+    },
+    [breakdownByCreator],
+  );
+
+  const submitVideosAndClear = useCallback(
+    async (deltas: { targetId: string; addVideos: number }[]) => {
+      await handleSubmitVideoUrls(deltas);
+      setVideoSubmitTargetIds(new Set());
+    },
+    [handleSubmitVideoUrls],
+  );
+
+  const selectedVideoTargetIdsList = useMemo(
+    () => [...videoSubmitTargetIds],
+    [videoSubmitTargetIds],
+  );
 
   const drawerCreator = useMemo(
     () => mergedCreators.find((c) => c.id === drawerCreatorId) ?? null,
@@ -146,81 +268,108 @@ function CreatorDashboardInner({
     setDrawerOpen(true);
   };
 
-  if (loading && creators.length === 0) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-muted">
-        Memuat data dashboard…
-      </div>
-    );
-  }
+  const showMainSkeleton = loading && creators.length === 0;
 
   return (
     <TooltipProvider delayDuration={120}>
-      <div className="relative min-h-screen overflow-x-hidden">
-        <div
-          className="pointer-events-none fixed inset-0 animate-gradient-bg opacity-70"
-          aria-hidden
-        />
-        <div
-          className="pointer-events-none fixed -left-40 top-24 h-72 w-72 rounded-full bg-neon-purple/25 blur-3xl glow-orb"
-          aria-hidden
-        />
-        <div
-          className="pointer-events-none fixed -right-32 bottom-0 h-80 w-80 rounded-full bg-neon-cyan/20 blur-3xl glow-orb"
-          aria-hidden
-          style={{ animationDelay: "1.2s" }}
-        />
+      <DashboardAtmosphere>
+        <div className="relative z-10 mx-auto flex max-w-[1600px] flex-col gap-6 px-4 py-10 sm:px-6 lg:px-10">
+          {showMainSkeleton ? (
+            <DashboardSkeleton />
+          ) : (
+            <>
+              <div className="dash-reveal-item">
+                <DashboardHeader
+                  selectedMonth={selectedMonth}
+                  onMonthChange={setSelectedMonth}
+                  filters={filters}
+                  onFiltersChange={setFilters}
+                  creatorOptions={mergedCreators.map((c) => ({
+                    id: c.id,
+                    name: c.name,
+                  }))}
+                  brandOptions={mergedBrands.map((b) => ({
+                    id: b.id,
+                    name: b.name,
+                  }))}
+                  onSubmitTargets={() => setTargetsModalOpen(true)}
+                  showSubmitVideos={videoSubmitTargetIds.size > 0}
+                  onSubmitVideos={() => setVideosModalOpen(true)}
+                  onOverview={() => setOverviewOpen(true)}
+                  onDataSettings={() => setDataSettingsOpen(true)}
+                  userEmail={userEmail}
+                  onSignOut={onSignOut}
+                />
+              </div>
 
-        <div className="relative mx-auto flex max-w-[1600px] flex-col gap-6 px-4 py-10 sm:px-6 lg:px-10">
-          <DashboardHeader
-            selectedMonth={selectedMonth}
-            onMonthChange={setSelectedMonth}
-            filters={filters}
-            onFiltersChange={setFilters}
-            creatorOptions={mergedCreators.map((c) => ({
-              id: c.id,
-              name: c.name,
-            }))}
-            brandOptions={mergedBrands.map((b) => ({ id: b.id, name: b.name }))}
-            onSubmitTargets={() => setTargetsModalOpen(true)}
-            onOverview={() => setOverviewOpen(true)}
-            onDataSettings={() => setDataSettingsOpen(true)}
-            userEmail={userEmail}
-            onSignOut={onSignOut}
-          />
+              {showSeedBanner ? (
+                <div className="dash-reveal-item dash-reveal-delay-1 flex flex-col gap-3 rounded-2xl border border-neon-purple/30 bg-neon-purple/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-foreground/90">
+                    Belum ada data creator / target di workspace bersama. Muat
+                    contoh sekali — semua user login akan melihat & mengedit data
+                    yang sama (tersinkron di Supabase).
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void seedIfEmpty()}
+                    className="btn-press shrink-0 rounded-xl border border-neon-cyan/40 bg-neon-cyan/15 px-4 py-2 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/25"
+                  >
+                    Muat data demo
+                  </button>
+                </div>
+              ) : null}
 
-          {showSeedBanner ? (
-            <div className="flex flex-col gap-3 rounded-2xl border border-neon-purple/30 bg-neon-purple/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-foreground/90">
-                Belum ada data creator / target di workspace bersama. Muat contoh
-                sekali — semua user login akan melihat & mengedit data yang sama
-                (tersinkron di Supabase).
-              </p>
-              <button
-                type="button"
-                onClick={() => void seedIfEmpty()}
-                className="shrink-0 rounded-xl border border-neon-cyan/40 bg-neon-cyan/15 px-4 py-2 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/25"
-              >
-                Muat data demo
-              </button>
-            </div>
-          ) : null}
+              <div className="dash-reveal-item dash-reveal-delay-2 space-y-2">
+                <QuickFilterChips
+                  segments={TABLE_CHIP_OPTIONS}
+                  value={quickFilter}
+                  onChange={setQuickFilter}
+                />
+                <p className="max-w-3xl text-xs leading-relaxed text-muted">
+                  <span className="font-medium text-foreground/80">
+                    All Creators
+                  </span>{" "}
+                  memuat gabungan target meja{" "}
+                  <span className="text-foreground/85">
+                    TNC Hanindo Ternak
+                  </span>{" "}
+                  dan{" "}
+                  <span className="text-foreground/85">FOLO Ternak</span>
+                  {unassignedTableSegmentTargetCount > 0 ? (
+                    <>
+                      , plus{" "}
+                      <span className="text-foreground/85">
+                        {unassignedTableSegmentTargetCount} baris
+                      </span>{" "}
+                      bersegmen All (kolom Table belum ke salah satu meja).
+                    </>
+                  ) : null}
+                  . Pindahkan per baris lewat{" "}
+                  <span className="font-medium text-foreground/80">Edit</span> →
+                  Table.
+                </p>
+              </div>
 
-          <QuickFilterChips
-            segments={TABLE_CHIP_OPTIONS}
-            value={quickFilter}
-            onChange={setQuickFilter}
-          />
-
-          <PerformanceTable
-            creators={mergedCreators}
-            creatorRows={creatorRows}
-            breakdownByCreator={breakdownByCreator}
-            totalRow={totalRow}
-            hasRows={hasRows}
-            onCreatorClick={openCreator}
-            onAdjustTarget={() => setTargetsModalOpen(true)}
-          />
+              <div className="dash-reveal-item dash-reveal-delay-3">
+                <PerformanceTable
+                  creators={mergedCreators}
+                  creatorRows={creatorRows}
+                  breakdownByCreator={breakdownByCreator}
+                  totalRow={totalRow}
+                  hasRows={hasRows}
+                  onCreatorClick={openCreator}
+                  onUpdateTargetRows={handleUpdateTargetRows}
+                  tableSegments={TABLE_CHIP_OPTIONS}
+                  videoSubmitSelectedIds={videoSubmitTargetIds}
+                  onToggleVideoSubmitTarget={toggleVideoSubmitTarget}
+                  onToggleAllVideoSubmitTargets={
+                    toggleAllVideoSubmitTargets
+                  }
+                  onOpenSubmitVideosForCreator={openSubmitVideosForCreator}
+                />
+              </div>
+            </>
+          )}
 
           <OverviewModal
             open={overviewOpen}
@@ -233,12 +382,26 @@ function CreatorDashboardInner({
             open={targetsModalOpen}
             onOpenChange={setTargetsModalOpen}
             selectedMonth={selectedMonth}
-            creators={mergedCreators}
-            brands={mergedBrands}
-            projects={mergedProjects}
-            tiktokAccounts={mergedTiktok}
+            creators={creators}
+            projects={projects}
+            tiktokAccounts={tiktokAccounts}
             tableSegments={TABLE_CHIP_OPTIONS}
             onSubmitTargets={handleSubmitTargets}
+          />
+
+          <SubmitVideosModal
+            open={videosModalOpen}
+            onOpenChange={setVideosModalOpen}
+            selectedTargetIds={selectedVideoTargetIdsList}
+            selectedMonth={selectedMonth}
+            targets={targets}
+            creators={creators}
+            brands={brands}
+            projects={projects}
+            campaignObjectives={campaignObjectives}
+            tiktokAccounts={tiktokAccounts}
+            tableSegments={TABLE_CHIP_OPTIONS}
+            onSubmitVideos={submitVideosAndClear}
           />
 
           <DataSettingsModal
@@ -268,8 +431,26 @@ function CreatorDashboardInner({
               aggregate={drawerAggregate}
             />
           ) : null}
+
+          <DashboardCommandMenu
+            open={commandOpen}
+            onOpenChange={setCommandOpen}
+            onOverview={() => setOverviewOpen(true)}
+            onDataSettings={() => setDataSettingsOpen(true)}
+            onSubmitTargets={() => setTargetsModalOpen(true)}
+            showSubmitVideos={videoSubmitTargetIds.size > 0}
+            onSubmitVideos={() => setVideosModalOpen(true)}
+            creatorFilterId={filters.creatorId}
+            onCreatorFilterChange={(creatorId) =>
+              setFilters({ ...filters, creatorId })
+            }
+            creatorOptions={mergedCreators.map((c) => ({
+              id: c.id,
+              name: c.name,
+            }))}
+          />
         </div>
-      </div>
+      </DashboardAtmosphere>
     </TooltipProvider>
   );
 }

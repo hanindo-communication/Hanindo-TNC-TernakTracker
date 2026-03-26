@@ -1,14 +1,86 @@
 import type { CreatorTarget, TargetFormRow } from "@/lib/types";
-import { buildTargetCompositeKey } from "@/lib/types";
+import {
+  buildTargetCompositeKey,
+  normalizeTargetTableSegmentForKey,
+} from "@/lib/types";
 
-function recomputeFinancials(t: CreatorTarget): CreatorTarget {
-  const expectedRevenue = t.targetVideos * t.incentivePerVideo + t.basePay;
-  const expectedProfit = expectedRevenue - t.incentives - t.reimbursements;
+/**
+ * Single source of truth: expected revenue & incentives dari leaf target,
+ * bukan kolom tersimpan yang bisa stale (seed lama / upsert parsial).
+ *
+ * - expected revenue = targetVideos × basePay
+ * - incentives (total ke creator) = targetVideos × incentivePerVideo
+ */
+export function syncDerivedFinancials(t: CreatorTarget): CreatorTarget {
+  const tv = Math.max(0, Math.floor(Number(t.targetVideos)) || 0);
+  const bp = Math.max(0, Number(t.basePay) || 0);
+  const ipv = Math.max(0, Math.floor(Number(t.incentivePerVideo)) || 0);
+  const expectedRevenue = tv * bp;
+  const incentives = tv * ipv;
+  const expectedProfit = expectedRevenue - incentives - t.reimbursements;
+  const actualProfit = t.actualRevenue - incentives - t.reimbursements;
   return {
     ...t,
+    targetVideos: tv,
+    basePay: bp,
+    incentivePerVideo: ipv,
     expectedRevenue,
+    incentives,
     expectedProfit,
+    actualProfit,
   };
+}
+
+function tableSegmentFromFormRow(row: TargetFormRow): string {
+  return normalizeTargetTableSegmentForKey(row.tableSegmentId);
+}
+
+/** Payload simpan dari dialog Edit target (satu baris leaf). */
+export interface CreatorTargetRowEditPayload {
+  targetVideos: number;
+  tableSegmentId: string;
+  basePay: number;
+  incentivePerVideo: number;
+}
+
+export type CreatorTargetRowSave = CreatorTargetRowEditPayload & {
+  targetId: string;
+};
+
+/** Terapkan edit penuh satu baris + sync expected revenue / incentives / profit. */
+export function applyTargetRowEdit(
+  t: CreatorTarget,
+  edit: CreatorTargetRowEditPayload,
+): CreatorTarget {
+  return syncDerivedFinancials({
+    ...t,
+    targetVideos: Math.max(0, Math.floor(Number(edit.targetVideos)) || 0),
+    tableSegmentId: normalizeTargetTableSegmentForKey(edit.tableSegmentId),
+    basePay: Math.max(0, Number(edit.basePay) || 0),
+    incentivePerVideo: Math.max(
+      0,
+      Math.floor(Number(edit.incentivePerVideo)) || 0,
+    ),
+  });
+}
+
+/** Update leaf target video count and recompute expected revenue / profit (actuals unchanged). */
+export function applyTargetVideosUpdate(
+  t: CreatorTarget,
+  targetVideos: number,
+): CreatorTarget {
+  const v = Math.max(0, Math.floor(Number(targetVideos)) || 0);
+  return syncDerivedFinancials({ ...t, targetVideos: v });
+}
+
+/** Add completed video count (from URL lines); keeps revenue fields unchanged. */
+export function applySubmittedVideosDelta(
+  t: CreatorTarget,
+  delta: number,
+): CreatorTarget {
+  const d = Math.max(0, Math.floor(Number(delta)) || 0);
+  const submittedVideos = Math.max(0, t.submittedVideos + d);
+  return { ...t, submittedVideos };
 }
 
 function compositeKeyFromRow(
@@ -21,6 +93,7 @@ function compositeKeyFromRow(
     campaignObjectiveId,
     tiktokAccountId: row.tiktokAccountId,
     month: row.month,
+    tableSegmentId: tableSegmentFromFormRow(row),
   });
 }
 
@@ -40,10 +113,15 @@ export function mergeTargetForms(
     const id = existing?.id ?? crypto.randomUUID();
     const submittedVideos = existing?.submittedVideos ?? 0;
     const actualRevenue = existing?.actualRevenue ?? 0;
-    const incentives = existing?.incentives ?? 0;
     const reimbursements = existing?.reimbursements ?? 0;
 
-    let next: CreatorTarget = {
+    const targetVideos = Math.max(0, Math.floor(Number(row.targetVideos)) || 0);
+    const incentivePerVideo = Math.max(
+      0,
+      Math.floor(Number(row.incentivePerVideo)) || 0,
+    );
+
+    const next: CreatorTarget = syncDerivedFinancials({
       id,
       creatorId: row.creatorId,
       projectId: row.projectId,
@@ -51,23 +129,18 @@ export function mergeTargetForms(
       creatorType: row.creatorType,
       tiktokAccountId: row.tiktokAccountId,
       month: row.month,
-      targetVideos: row.targetVideos,
+      tableSegmentId: tableSegmentFromFormRow(row),
+      targetVideos,
       submittedVideos,
-      incentivePerVideo: row.incentivePerVideo,
+      incentivePerVideo,
       basePay: row.basePay,
       expectedRevenue: 0,
       actualRevenue,
-      incentives,
+      incentives: 0,
       reimbursements,
       expectedProfit: 0,
-      actualProfit: actualRevenue - incentives - reimbursements,
-    };
-    next = recomputeFinancials(next);
-    next = {
-      ...next,
-      actualProfit:
-        next.actualRevenue - next.incentives - next.reimbursements,
-    };
+      actualProfit: actualRevenue - reimbursements,
+    });
     map.set(key, next);
   }
 

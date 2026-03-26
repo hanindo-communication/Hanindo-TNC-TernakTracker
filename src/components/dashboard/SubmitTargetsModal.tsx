@@ -3,6 +3,12 @@
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { BulkTargetSubmissionsTable } from "@/components/dashboard/BulkTargetSubmissionsTable";
+import { useFormSettings } from "@/hooks/useFormSettings";
+import {
+  mergeCreators,
+  mergeProjects,
+  mergeTikTokAccounts,
+} from "@/lib/dashboard/merge-entities";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +18,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type {
-  Brand,
   Creator,
   Project,
   TargetFormRow,
@@ -24,7 +29,7 @@ import {
   BASE_PAY_PRESET_VALUES,
   defaultBasePayPreset,
 } from "@/lib/dashboard/base-pay-presets";
-import { TABLE_SEGMENT_ALL_ID } from "@/lib/dashboard/table-segments";
+import { TABLE_SEGMENT_TNC } from "@/lib/dashboard/table-segments";
 import type { TableSegmentOption } from "@/components/dashboard/QuickFilterChips";
 
 const basePayAllowed = new Set<number>([...BASE_PAY_PRESET_VALUES]);
@@ -32,7 +37,7 @@ const basePayAllowed = new Set<number>([...BASE_PAY_PRESET_VALUES]);
 function emptyRow(month: string): TargetFormRow {
   return {
     creatorId: "",
-    tableSegmentId: TABLE_SEGMENT_ALL_ID,
+    tableSegmentId: TABLE_SEGMENT_TNC,
     projectId: "",
     creatorType: "Internal",
     tiktokAccountId: "",
@@ -43,13 +48,9 @@ function emptyRow(month: string): TargetFormRow {
   };
 }
 
-function validateRow(
-  row: TargetFormRow,
-  projects: Project[],
-  brands: Brand[],
-): string | null {
+function validateRow(row: TargetFormRow): string | null {
   if (!row.creatorId) return "Each row needs a creator.";
-  if (!row.projectId) return "Each row needs a project.";
+  if (!row.projectId) return "Each row needs a campaign.";
   if (!row.tiktokAccountId) return "Each row needs a TikTok account.";
   if (!row.month) return "Each row needs a month.";
   if (row.targetVideos < 0) return "Target videos must be 0 or more.";
@@ -57,18 +58,6 @@ function validateRow(
     return "Incentive per video must be 0 or more.";
   if (!basePayAllowed.has(row.basePay))
     return "Base pay harus salah satu: 785.000, 1.570.000, atau 2.350.000.";
-  if (
-    row.tableSegmentId === "tnc" ||
-    row.tableSegmentId === "folo"
-  ) {
-    const p = projects.find((x) => x.id === row.projectId);
-    const br = p?.brandId
-      ? brands.find((b) => b.id === p.brandId)
-      : undefined;
-    if (!br || br.tableSegmentId !== row.tableSegmentId) {
-      return "Project tidak cocok dengan Table (TNC / FOLO) yang dipilih.";
-    }
-  }
   return null;
 }
 
@@ -76,8 +65,8 @@ interface SubmitTargetsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   selectedMonth: string;
+  /** Data workspace (Supabase); digabung dengan Data settings (localStorage) di dalam modal. */
   creators: Creator[];
-  brands: Brand[];
   projects: Project[];
   tiktokAccounts: TikTokAccount[];
   tableSegments: TableSegmentOption[];
@@ -88,13 +77,27 @@ export function SubmitTargetsModal({
   open,
   onOpenChange,
   selectedMonth,
-  creators,
-  brands,
-  projects,
-  tiktokAccounts,
+  creators: creatorsWorkspace,
+  projects: projectsWorkspace,
+  tiktokAccounts: tiktokWorkspace,
   tableSegments,
   onSubmitTargets,
 }: SubmitTargetsModalProps) {
+  const { stored: formEntities } = useFormSettings();
+
+  const creators = useMemo(
+    () => mergeCreators(creatorsWorkspace, formEntities.creators),
+    [creatorsWorkspace, formEntities.creators],
+  );
+  const projects = useMemo(
+    () => mergeProjects(projectsWorkspace, formEntities.projects),
+    [projectsWorkspace, formEntities.projects],
+  );
+  const tiktokAccounts = useMemo(
+    () => mergeTikTokAccounts(tiktokWorkspace, formEntities.tiktokAccounts),
+    [tiktokWorkspace, formEntities.tiktokAccounts],
+  );
+
   const [rows, setRows] = useState<TargetFormRow[]>(() => [
     emptyRow(selectedMonth),
   ]);
@@ -133,7 +136,7 @@ export function SubmitTargetsModal({
 
   const handleSubmit = async () => {
     for (const row of rows) {
-      const err = validateRow(row, projects, brands);
+      const err = validateRow(row);
       if (err) {
         toast.error("Validasi", { description: err });
         return;
@@ -157,7 +160,7 @@ export function SubmitTargetsModal({
 
   const missingHint = [
     missingCreators && "creator",
-    missingProjects && "project",
+    missingProjects && "campaign",
     missingTiktok && "akun TikTok",
   ]
     .filter(Boolean)
@@ -172,7 +175,7 @@ export function SubmitTargetsModal({
         <DialogHeader className="sr-only shrink-0">
           <DialogTitle>Bulk Target Submissions</DialogTitle>
           <DialogDescription>
-            Isi target video untuk beberapa creator dan proyek sekaligus.
+            Isi target video untuk beberapa creator dan campaign sekaligus.
           </DialogDescription>
         </DialogHeader>
 
@@ -203,7 +206,6 @@ export function SubmitTargetsModal({
             onUpdateRow={updateRow}
             onRemoveRow={removeRow}
             creators={creators}
-            brands={brands}
             projects={projects}
             tiktokAccounts={tiktokAccounts}
             tableSegments={tableSegments}

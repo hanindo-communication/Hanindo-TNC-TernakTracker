@@ -4,12 +4,11 @@ import {
   ChevronRight,
   Eye,
   Film,
-  PencilLine,
+  Pencil,
   SlidersHorizontal,
 } from "lucide-react";
 import Image from "next/image";
 import { useState, type ReactNode } from "react";
-import { toast } from "sonner";
 import type { Creator } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import type {
@@ -18,7 +17,9 @@ import type {
   TotalRow,
 } from "@/hooks/useCreatorDashboard";
 import { CreatorTypeChip } from "@/components/dashboard/CreatorTypeChip";
-import { TargetStatusIcon } from "@/components/dashboard/TargetStatusIcon";
+import { EditCreatorTargetsDialog } from "@/components/dashboard/EditCreatorTargetsDialog";
+import type { TableSegmentOption } from "@/components/dashboard/QuickFilterChips";
+import type { CreatorTargetRowSave } from "@/lib/dashboard/merge-targets";
 import { cn } from "@/lib/utils";
 
 const th =
@@ -31,7 +32,17 @@ interface PerformanceTableProps {
   totalRow: TotalRow | null;
   hasRows: boolean;
   onCreatorClick: (creatorId: string) => void;
-  onAdjustTarget: () => void;
+  onUpdateTargetRows: (
+    updates: CreatorTargetRowSave[],
+  ) => void | Promise<void>;
+  tableSegments: TableSegmentOption[];
+  videoSubmitSelectedIds: Set<string>;
+  onToggleVideoSubmitTarget: (targetId: string, selected: boolean) => void;
+  onToggleAllVideoSubmitTargets: (
+    targetIds: string[],
+    selected: boolean,
+  ) => void;
+  onOpenSubmitVideosForCreator: (creatorId: string) => void;
 }
 
 export function PerformanceTable({
@@ -41,9 +52,26 @@ export function PerformanceTable({
   totalRow,
   hasRows,
   onCreatorClick,
-  onAdjustTarget,
+  onUpdateTargetRows,
+  tableSegments,
+  videoSubmitSelectedIds,
+  onToggleVideoSubmitTarget,
+  onToggleAllVideoSubmitTargets,
+  onOpenSubmitVideosForCreator,
 }: PerformanceTableProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [editCtx, setEditCtx] = useState<{
+    creatorName: string;
+    rows: {
+      targetId: string;
+      projectName: string;
+      campaignLabel: string;
+      targetVideos: number;
+      tableSegmentId: string;
+      basePay: number;
+      incentivePerVideo: number;
+    }[];
+  } | null>(null);
 
   const toggle = (id: string) => {
     setExpanded((p) => ({ ...p, [id]: !p[id] }));
@@ -76,7 +104,7 @@ export function PerformanceTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="min-w-[1200px] w-full border-collapse text-sm">
+        <table className="min-w-[1100px] w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-white/[0.06] bg-white/[0.02]">
               <th className={cn(th, "sticky left-0 z-20 min-w-[220px] bg-[#070c18]/95 backdrop-blur")}>
@@ -89,14 +117,14 @@ export function PerformanceTable({
               <th className={th}>Incentives</th>
               <th className={th}>Reimbursements</th>
               <th className={th}>Expected Profit</th>
-              <th className={th}>Actual Profit</th>
-              <th className={cn(th, "text-center")}>Target?</th>
             </tr>
           </thead>
 
           {creatorRows.map((row) => {
             const c = creators.find((x) => x.id === row.creatorId);
             if (!c) return null;
+            const avatarSrc = (c.avatarUrl ?? "").trim();
+            const hasAvatar = avatarSrc.length > 0;
             const open = expanded[row.creatorId];
             const breakdown = breakdownByCreator(row.creatorId);
 
@@ -107,8 +135,9 @@ export function PerformanceTable({
               >
                 <tr
                   className={cn(
-                    "relative transition-colors",
-                    "hover:bg-white/[0.03] hover:shadow-[inset_0_0_0_1px_rgba(50,230,255,0.12)]",
+                    "relative transition-colors duration-300",
+                    "hover:bg-white/[0.04]",
+                    "hover:shadow-[inset_0_0_0_1px_rgba(50,230,255,0.14),0_0_24px_rgba(50,230,255,0.06)]",
                   )}
                 >
                   <td
@@ -133,14 +162,23 @@ export function PerformanceTable({
                         />
                       </button>
                       <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-full border border-neon-cyan/25 shadow-[0_0_20px_rgba(50,230,255,0.15)]">
-                        <Image
-                          src={c.avatarUrl}
-                          alt=""
-                          width={40}
-                          height={40}
-                          className="object-cover"
-                          unoptimized
-                        />
+                        {hasAvatar ? (
+                          <Image
+                            src={avatarSrc}
+                            alt={c.name}
+                            width={40}
+                            height={40}
+                            className="object-cover"
+                            unoptimized
+                          />
+                        ) : (
+                          <div
+                            className="flex h-full w-full items-center justify-center bg-gradient-to-br from-neon-cyan/20 to-neon-purple/20 text-sm font-bold text-foreground/80"
+                            aria-hidden
+                          >
+                            {(c.name.trim().slice(0, 1) || "?").toUpperCase()}
+                          </div>
+                        )}
                       </div>
                       <div className="min-w-0">
                         <button
@@ -153,29 +191,40 @@ export function PerformanceTable({
                         <div className="mt-1">
                           <CreatorTypeChip type={c.creatorType} />
                         </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <RowMiniAction
+                            icon={<Eye className="h-3 w-3" />}
+                            text="Details"
+                            onClick={() => onCreatorClick(row.creatorId)}
+                          />
+                          <RowMiniAction
+                            icon={<Film className="h-3 w-3" />}
+                            text="Videos"
+                            onClick={() =>
+                              onOpenSubmitVideosForCreator(row.creatorId)
+                            }
+                          />
+                          <RowMiniAction
+                            icon={<Pencil className="h-3 w-3" />}
+                            text="Edit"
+                            onClick={() => {
+                              const b = breakdownByCreator(row.creatorId);
+                              setEditCtx({
+                                creatorName: c.name,
+                                rows: b.map((x) => ({
+                                  targetId: x.targetId,
+                                  projectName: x.projectName,
+                                  campaignLabel: x.campaignLabel,
+                                  targetVideos: x.targetVideos,
+                                  tableSegmentId: x.tableSegmentId,
+                                  basePay: x.basePay,
+                                  incentivePerVideo: x.incentivePerVideo,
+                                })),
+                              });
+                            }}
+                          />
+                        </div>
                       </div>
-                    </div>
-
-                    <div className="pointer-events-none absolute right-2 top-2 z-20 flex gap-1 opacity-0 transition group-hover:pointer-events-auto group-hover:opacity-100">
-                      <RowMiniAction
-                        icon={<Eye className="h-3 w-3" />}
-                        text="Details"
-                        onClick={() => onCreatorClick(row.creatorId)}
-                      />
-                      <RowMiniAction
-                        icon={<Film className="h-3 w-3" />}
-                        text="Videos"
-                        onClick={() => {
-                          toast.message("Submit Videos", {
-                            description: `Open upload flow for ${c.name} (mock).`,
-                          });
-                        }}
-                      />
-                      <RowMiniAction
-                        icon={<PencilLine className="h-3 w-3" />}
-                        text="Target"
-                        onClick={onAdjustTarget}
-                      />
                     </div>
                   </td>
                   <td className="px-3 py-3 font-mono text-xs text-foreground">
@@ -199,61 +248,132 @@ export function PerformanceTable({
                   <td className="px-3 py-3 text-xs text-neon-purple/90">
                     {formatCurrency(row.expectedProfit)}
                   </td>
-                  <td className="px-3 py-3 text-xs text-neon-cyan/90">
-                    {formatCurrency(row.actualProfit)}
-                  </td>
-                  <td className="px-3 py-3 text-center">
-                    <TargetStatusIcon status={row.status} />
-                  </td>
                 </tr>
 
-                {open ? (
-                  <tr className="bg-white/[0.015] animate-in fade-in-0 slide-in-from-top-1 duration-300">
-                    <td colSpan={10} className="px-3 pb-4 pt-1">
-                      <div className="ml-12 overflow-hidden rounded-xl border border-white/[0.06] bg-black/20">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="text-[10px] uppercase tracking-wider text-muted">
-                              <th className="px-3 py-2 text-left">Project</th>
-                              <th className="px-3 py-2 text-left">Campaign</th>
-                              <th className="px-3 py-2 text-left">Target</th>
-                              <th className="px-3 py-2 text-left">Submitted</th>
-                              <th className="px-3 py-2 text-left">Exp. Rev</th>
-                              <th className="px-3 py-2 text-left">Act. Rev</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {breakdown.map((b) => (
-                              <tr
-                                key={b.targetId}
-                                className="border-t border-white/[0.04]"
-                              >
-                                <td className="px-3 py-2 text-foreground/90">
-                                  {b.projectName}
-                                </td>
-                                <td className="px-3 py-2 text-muted">
-                                  {b.campaignLabel}
-                                </td>
-                                <td className="px-3 py-2 font-mono">
-                                  {b.targetVideos}
-                                </td>
-                                <td className="px-3 py-2 font-mono">
-                                  {b.submittedVideos}
-                                </td>
-                                <td className="px-3 py-2">
-                                  {formatCurrency(b.expectedRevenue)}
-                                </td>
-                                <td className="px-3 py-2">
-                                  {formatCurrency(b.actualRevenue)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                <tr className="border-b-0 bg-white/[0.015]">
+                  <td colSpan={8} className="p-0">
+                    <div
+                      className={cn(
+                        "perf-expand-inner grid transition-[grid-template-rows] duration-300 ease-out",
+                        open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+                      )}
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="px-3 pb-4 pt-1">
+                          <div className="ml-12 overflow-hidden rounded-xl border border-white/[0.06] bg-black/20">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-[10px] uppercase tracking-wider text-muted">
+                                  <th className="w-10 px-2 py-2 text-left">
+                                    <span className="sr-only">
+                                      Pilih untuk submit video
+                                    </span>
+                                    <input
+                                      type="checkbox"
+                                      className="h-3.5 w-3.5 rounded border-white/25 bg-white/5 text-neon-cyan focus:ring-neon-cyan/40"
+                                      checked={
+                                        breakdown.length > 0 &&
+                                        breakdown.every((x) =>
+                                          videoSubmitSelectedIds.has(
+                                            x.targetId,
+                                          ),
+                                        )
+                                      }
+                                      ref={(el) => {
+                                        if (!el) return;
+                                        const all =
+                                          breakdown.length > 0 &&
+                                          breakdown.every((x) =>
+                                            videoSubmitSelectedIds.has(
+                                              x.targetId,
+                                            ),
+                                          );
+                                        const some = breakdown.some((x) =>
+                                          videoSubmitSelectedIds.has(
+                                            x.targetId,
+                                          ),
+                                        );
+                                        el.indeterminate = some && !all;
+                                      }}
+                                      onChange={(e) =>
+                                        onToggleAllVideoSubmitTargets(
+                                          breakdown.map((x) => x.targetId),
+                                          e.target.checked,
+                                        )
+                                      }
+                                      aria-label="Pilih semua campaign untuk submit video"
+                                    />
+                                  </th>
+                                  <th className="whitespace-nowrap px-3 py-2 text-left">
+                                    Table
+                                  </th>
+                                  <th className="px-3 py-2 text-left">
+                                    Campaign
+                                  </th>
+                                  <th className="px-3 py-2 text-left">
+                                    Target
+                                  </th>
+                                  <th className="px-3 py-2 text-left">
+                                    Submitted
+                                  </th>
+                                  <th className="px-3 py-2 text-left">
+                                    Exp. Rev
+                                  </th>
+                                  <th className="px-3 py-2 text-left">
+                                    Act. Rev
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {breakdown.map((b) => (
+                                  <tr
+                                    key={b.targetId}
+                                    className="border-t border-white/[0.04]"
+                                  >
+                                    <td className="px-2 py-2 align-middle">
+                                      <input
+                                        type="checkbox"
+                                        className="h-3.5 w-3.5 rounded border-white/25 bg-white/5 text-neon-cyan focus:ring-neon-cyan/40"
+                                        checked={videoSubmitSelectedIds.has(
+                                          b.targetId,
+                                        )}
+                                        onChange={(e) =>
+                                          onToggleVideoSubmitTarget(
+                                            b.targetId,
+                                            e.target.checked,
+                                          )
+                                        }
+                                        aria-label={`Submit video: ${b.projectName}`}
+                                      />
+                                    </td>
+                                    <td className="whitespace-nowrap px-3 py-2 text-muted">
+                                      {b.tableSegmentLabel}
+                                    </td>
+                                    <td className="px-3 py-2 text-foreground/90">
+                                      {b.projectName}
+                                    </td>
+                                    <td className="px-3 py-2 font-mono">
+                                      {b.targetVideos}
+                                    </td>
+                                    <td className="px-3 py-2 font-mono">
+                                      {b.submittedVideos}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {formatCurrency(b.expectedRevenue)}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {formatCurrency(b.actualRevenue)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
                       </div>
-                    </td>
-                  </tr>
-                ) : null}
+                    </div>
+                  </td>
+                </tr>
               </tbody>
             );
           })}
@@ -285,15 +405,22 @@ export function PerformanceTable({
                 <td className="px-3 py-4 text-sm font-bold text-neon-purple">
                   {formatCurrency(totalRow.expectedProfit)}
                 </td>
-                <td className="px-3 py-4 text-sm font-bold text-neon-cyan">
-                  {formatCurrency(totalRow.actualProfit)}
-                </td>
-                <td className="px-3 py-4" />
               </tr>
             </tfoot>
           ) : null}
         </table>
       </div>
+
+      <EditCreatorTargetsDialog
+        open={editCtx !== null}
+        onOpenChange={(o) => {
+          if (!o) setEditCtx(null);
+        }}
+        creatorName={editCtx?.creatorName ?? ""}
+        rows={editCtx?.rows ?? []}
+        tableSegments={tableSegments}
+        onSave={onUpdateTargetRows}
+      />
     </div>
   );
 }

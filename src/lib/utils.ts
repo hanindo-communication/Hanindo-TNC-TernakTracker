@@ -5,10 +5,13 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number, currency = "USD"): string {
-  return new Intl.NumberFormat("en-US", {
+/** Default IDR (Rupiah). Pass currency e.g. `"USD"` for other locales. */
+export function formatCurrency(value: number, currency = "IDR"): string {
+  const locale = currency === "IDR" ? "id-ID" : "en-US";
+  return new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
+    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(value);
 }

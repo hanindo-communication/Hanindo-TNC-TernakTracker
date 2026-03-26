@@ -3,7 +3,6 @@
 import { Copy, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
-  Brand,
   Creator,
   CreatorType,
   Project,
@@ -17,15 +16,20 @@ import {
   defaultBasePayPreset,
   formatBasePayLabel,
 } from "@/lib/dashboard/base-pay-presets";
-import { TABLE_SEGMENT_ALL_ID } from "@/lib/dashboard/table-segments";
+import { OptionalNonNegIntInput } from "@/components/dashboard/OptionalNonNegIntInput";
 import { cn } from "@/lib/utils";
 
 const cell =
   "border-b border-white/[0.07] px-2 py-2 align-middle text-foreground";
 const thBase =
   "whitespace-nowrap border-b border-white/15 bg-white/[0.06] px-2 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted";
-const inputClass =
-  "h-9 w-full min-w-[7rem] rounded-md border border-white/10 bg-white/[0.04] px-2 text-sm text-foreground outline-none transition focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
+/** Native selects: `[color-scheme:dark]` + `.bulk-native-select` align OS dropdown with panel palette. */
+const fieldClass =
+  "h-9 w-full min-w-[7rem] rounded-md border border-white/10 bg-panel px-2 text-sm text-foreground outline-none transition [color-scheme:dark] focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
+
+const inputClass = fieldClass;
+
+const selectClass = cn(fieldClass, "bulk-native-select");
 
 function Req({ children }: { children: ReactNode }) {
   return (
@@ -47,7 +51,6 @@ interface BulkTargetSubmissionsTableProps {
   onUpdateRow: (idx: number, next: TargetFormRow) => void;
   onRemoveRow: (idx: number) => void;
   creators: Creator[];
-  brands: Brand[];
   projects: Project[];
   tiktokAccounts: TikTokAccount[];
   /** Sama dengan chip di dashboard: All + TNC + FOLO. */
@@ -62,7 +65,6 @@ export function BulkTargetSubmissionsTable({
   onUpdateRow,
   onRemoveRow,
   creators,
-  brands,
   projects,
   tiktokAccounts,
   tableSegments,
@@ -112,7 +114,7 @@ export function BulkTargetSubmissionsTable({
                 <Req>Table</Req>
               </th>
               <th className={thBase}>
-                <Req>Project</Req>
+                <Req>Campaign</Req>
               </th>
               <th className={thBase}>
                 <Req>Creator Type</Req>
@@ -141,7 +143,6 @@ export function BulkTargetSubmissionsTable({
                 onChange={(next) => onUpdateRow(idx, next)}
                 onRemove={() => onRemoveRow(idx)}
                 creators={creators}
-                brands={brands}
                 projects={projects}
                 tiktokAccounts={tiktokAccounts}
                 tableSegments={tableSegments}
@@ -161,7 +162,6 @@ function BulkTableRow({
   onChange,
   onRemove,
   creators,
-  brands,
   projects,
   tiktokAccounts,
   tableSegments,
@@ -172,7 +172,6 @@ function BulkTableRow({
   onChange: (next: TargetFormRow) => void;
   onRemove: () => void;
   creators: Creator[];
-  brands: Brand[];
   projects: Project[];
   tiktokAccounts: TikTokAccount[];
   tableSegments: TableSegmentOption[];
@@ -181,40 +180,16 @@ function BulkTableRow({
     (t) => t.creatorId === row.creatorId,
   );
 
-  const projectsForSegment =
-    !row.tableSegmentId || row.tableSegmentId === TABLE_SEGMENT_ALL_ID
-      ? projects
-      : projects.filter((p) => {
-          const br = brands.find((b) => b.id === p.brandId);
-          return br?.tableSegmentId === row.tableSegmentId;
-        });
-
   const patch = (partial: Partial<TargetFormRow>) => {
     onChange({ ...row, ...partial });
   };
 
   const onTableChange = (tableSegmentId: string) => {
-    let projectId = row.projectId;
-    if (tableSegmentId !== TABLE_SEGMENT_ALL_ID && projectId) {
-      const p = projects.find((x) => x.id === projectId);
-      const br = p?.brandId
-        ? brands.find((b) => b.id === p.brandId)
-        : undefined;
-      if (br && br.tableSegmentId !== tableSegmentId) projectId = "";
-    }
-    onChange({ ...row, tableSegmentId, projectId });
+    onChange({ ...row, tableSegmentId });
   };
 
   const onProjectChange = (projectId: string) => {
-    const p = projects.find((x) => x.id === projectId);
-    const br = p?.brandId
-      ? brands.find((b) => b.id === p.brandId)
-      : undefined;
-    const tableSegmentId =
-      br?.tableSegmentId === "folo" || br?.tableSegmentId === "tnc"
-        ? br.tableSegmentId
-        : row.tableSegmentId;
-    onChange({ ...row, projectId, tableSegmentId });
+    onChange({ ...row, projectId });
   };
 
   const onCreatorChange = (creatorId: string) => {
@@ -240,7 +215,7 @@ function BulkTableRow({
       </td>
       <td className={cn(cell, "min-w-[150px]")}>
         <select
-          className={inputClass}
+          className={selectClass}
           value={row.tableSegmentId}
           onChange={(e) => onTableChange(e.target.value)}
           aria-label={`Table row ${rowIndex + 1}`}
@@ -254,13 +229,13 @@ function BulkTableRow({
       </td>
       <td className={cn(cell, "min-w-[140px]")}>
         <select
-          className={inputClass}
+          className={selectClass}
           value={row.projectId}
           onChange={(e) => onProjectChange(e.target.value)}
-          aria-label={`Project row ${rowIndex + 1}`}
+          aria-label={`Campaign row ${rowIndex + 1}`}
         >
-          <option value="">Select project</option>
-          {projectsForSegment.map((p) => (
+          <option value="">Select campaign</option>
+          {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
             </option>
@@ -269,7 +244,7 @@ function BulkTableRow({
       </td>
       <td className={cn(cell, "min-w-[120px]")}>
         <select
-          className={inputClass}
+          className={selectClass}
           value={row.creatorType}
           onChange={(e) => {
             const creatorType = e.target.value as CreatorType;
@@ -287,7 +262,7 @@ function BulkTableRow({
       </td>
       <td className={cn(cell, "min-w-[160px]")}>
         <select
-          className={inputClass}
+          className={selectClass}
           value={row.tiktokAccountId}
           onChange={(e) => patch({ tiktokAccountId: e.target.value })}
           disabled={!row.creatorId}
@@ -311,32 +286,24 @@ function BulkTableRow({
         />
       </td>
       <td className={cn(cell, "w-24 min-w-[5rem]")}>
-        <input
-          type="number"
-          min={0}
+        <OptionalNonNegIntInput
           className={inputClass}
           value={row.targetVideos}
-          onChange={(e) =>
-            patch({ targetVideos: Number(e.target.value) || 0 })
-          }
+          onCommit={(n) => patch({ targetVideos: n })}
           aria-label={`Target videos row ${rowIndex + 1}`}
         />
       </td>
       <td className={cn(cell, "min-w-[110px]")}>
-        <input
-          type="number"
-          min={0}
+        <OptionalNonNegIntInput
           className={inputClass}
           value={row.incentivePerVideo}
-          onChange={(e) =>
-            patch({ incentivePerVideo: Number(e.target.value) || 0 })
-          }
+          onCommit={(n) => patch({ incentivePerVideo: n })}
           aria-label={`Incentive per video row ${rowIndex + 1}`}
         />
       </td>
       <td className={cn(cell, "min-w-[9rem]")}>
         <select
-          className={inputClass}
+          className={selectClass}
           value={row.basePay}
           onChange={(e) => patch({ basePay: Number(e.target.value) })}
           aria-label={`Base pay row ${rowIndex + 1}`}

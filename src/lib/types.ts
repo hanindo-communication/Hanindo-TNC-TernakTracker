@@ -8,7 +8,7 @@ export type TableSegmentId = "tnc" | "folo";
 export interface Brand {
   id: string;
   name: string;
-  /** FOLO vs TNC Hanindo — diatur di Data settings per brand. */
+  /** Legacy / sinkron DB (`brands.table_segment`); pemisahan meja pakai kolom Table di target, bukan pengaturan per brand. */
   tableSegmentId: TableSegmentId;
 }
 
@@ -54,6 +54,8 @@ export interface CreatorTarget {
   creatorType: CreatorType;
   tiktokAccountId: string;
   month: string;
+  /** Dari kolom Table di Submit Targets: all | tnc | folo. */
+  tableSegmentId: string;
   targetVideos: number;
   submittedVideos: number;
   incentivePerVideo: number;
@@ -79,6 +81,21 @@ export interface TargetFormRow {
   basePay: number;
 }
 
+/** Satu baris di modal Submit Videos (bulk). */
+export interface VideoSubmitFormRow {
+  /** Null jika baris baru — dicocokkan ke target lewat composite key saat submit. */
+  targetId: string | null;
+  creatorId: string;
+  tableSegmentId: string;
+  projectId: string;
+  campaignObjectiveId: string;
+  creatorType: CreatorType;
+  tiktokAccountId: string;
+  month: string;
+  /** URL TikTok, pisahkan baris baru atau koma. */
+  videoUrls: string;
+}
+
 /** Chip filter: all | tnc | folo. */
 export type QuickFilter = string;
 
@@ -87,6 +104,13 @@ export interface DashboardFilters {
   brandId: string;
 }
 
+/** Segmen baris target untuk composite key & upsert: all | tnc | folo */
+export function normalizeTargetTableSegmentForKey(raw: string): string {
+  if (raw === "tnc" || raw === "folo") return raw;
+  return "all";
+}
+
+/** Composite key termasuk table segment — dua baris beda meja tidak saling timpa. */
 export function buildTargetCompositeKey(
   t: Pick<
     CreatorTarget,
@@ -95,13 +119,16 @@ export function buildTargetCompositeKey(
     | "campaignObjectiveId"
     | "tiktokAccountId"
     | "month"
+    | "tableSegmentId"
   >,
 ): string {
+  const seg = normalizeTargetTableSegmentForKey(t.tableSegmentId);
   return [
     t.creatorId,
     t.projectId,
     t.campaignObjectiveId,
     t.tiktokAccountId,
     t.month,
+    seg,
   ].join("::");
 }

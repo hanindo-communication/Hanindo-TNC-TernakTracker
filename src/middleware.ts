@@ -1,5 +1,28 @@
 import { createServerClient } from "@supabase/ssr";
+import type { User } from "@supabase/supabase-js";
 import { NextResponse, type NextRequest } from "next/server";
+
+const AUTH_GET_USER_TIMEOUT_MS = 12_000;
+
+async function getUserWithTimeout(
+  supabase: ReturnType<typeof createServerClient>,
+): Promise<Awaited<ReturnType<typeof supabase.auth.getUser>>> {
+  return Promise.race([
+    supabase.auth.getUser(),
+    new Promise<Awaited<ReturnType<typeof supabase.auth.getUser>>>(
+      (_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `supabase.auth.getUser() exceeded ${AUTH_GET_USER_TIMEOUT_MS}ms`,
+              ),
+            ),
+          AUTH_GET_USER_TIMEOUT_MS,
+        ),
+    ),
+  ]);
+}
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -29,17 +52,17 @@ export async function middleware(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user: User | null = null;
+  try {
+    const { data } = await getUserWithTimeout(supabase);
+    user = data.user ?? null;
+  } catch {
+    user = null;
+  }
 
   const path = request.nextUrl.pathname;
 
-  if (
-    !user &&
-    !path.startsWith("/login") &&
-    !path.startsWith("/auth")
-  ) {
+  if (!user && !path.startsWith("/login") && !path.startsWith("/auth")) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

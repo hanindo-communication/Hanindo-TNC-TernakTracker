@@ -25,6 +25,9 @@ export function CreatorDetailDrawer({
 }: CreatorDetailDrawerProps) {
   if (!creator || !aggregate) return null;
 
+  const avatarSrc = (creator.avatarUrl ?? "").trim();
+  const hasAvatar = avatarSrc.length > 0;
+
   const series = performanceHistory[creator.id] ?? [
     0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85,
   ];
@@ -56,14 +59,23 @@ export function CreatorDetailDrawer({
           <div className="flex-1 space-y-6 overflow-y-auto px-5 py-6">
             <div className="flex items-center gap-4">
               <div className="relative h-16 w-16 overflow-hidden rounded-2xl border border-neon-cyan/30 shadow-[0_0_30px_rgba(50,230,255,0.2)]">
-                <Image
-                  src={creator.avatarUrl}
-                  alt=""
-                  width={64}
-                  height={64}
-                  className="object-cover"
-                  unoptimized
-                />
+                {hasAvatar ? (
+                  <Image
+                    src={avatarSrc}
+                    alt={creator.name}
+                    width={64}
+                    height={64}
+                    className="object-cover"
+                    unoptimized
+                  />
+                ) : (
+                  <div
+                    className="flex h-full w-full items-center justify-center bg-gradient-to-br from-neon-cyan/20 to-neon-purple/20 text-2xl font-bold text-foreground/80"
+                    aria-hidden
+                  >
+                    {(creator.name.trim().slice(0, 1) || "?").toUpperCase()}
+                  </div>
+                )}
               </div>
               <div className="min-w-0 space-y-2">
                 <p className="truncate text-sm text-neon-cyan">
