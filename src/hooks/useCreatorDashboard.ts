@@ -23,7 +23,10 @@ import {
 } from "@/lib/supabase/format-client-error";
 import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
 import { withPostgrestSchemaRetry } from "@/lib/supabase/postgrest-retry";
-import { DEFAULT_HANINDO_SHARING_PERCENT } from "@/lib/dashboard/creator-financial-overrides";
+import {
+  DEFAULT_HANINDO_SHARING_PERCENT,
+  mergeHanindoPercentsFromCreators,
+} from "@/lib/dashboard/creator-financial-overrides";
 import {
   HANINDO_SHARING_RATE_ON_TARGET_REVENUE,
   OVERVIEW_FOLO_SEGMENT_SHARE,
@@ -138,7 +141,7 @@ function sumExpectedRevenueForTableSegment(
 }
 
 export function useCreatorDashboard() {
-  const { snapshot: hanindoPercentByCreator } = useCreatorHanindoPercents();
+  const { snapshot: hanindoLocalSnapshot } = useCreatorHanindoPercents();
   const supabase = useMemo(() => createClient(), []);
 
   const [bundle, setBundle] = useState<DashboardBundle | null>(null);
@@ -197,6 +200,11 @@ export function useCreatorDashboard() {
   const campaignObjectives = bundle?.campaignObjectives ?? [];
   const tiktokAccounts = bundle?.tiktokAccounts ?? [];
   const targets = bundle?.targets ?? [];
+
+  const hanindoPercentByCreator = useMemo(
+    () => mergeHanindoPercentsFromCreators(creators, hanindoLocalSnapshot),
+    [creators, hanindoLocalSnapshot],
+  );
 
   const monthTargets = useMemo(
     () => targets.filter((t) => t.month === selectedMonth),

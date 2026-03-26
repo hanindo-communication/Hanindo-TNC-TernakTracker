@@ -9,8 +9,12 @@ import {
   Trash2,
 } from "lucide-react";
 import Image from "next/image";
-import { useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { Creator } from "@/lib/types";
+import {
+  DEFAULT_HANINDO_SHARING_PERCENT,
+  mergeHanindoPercentsFromCreators,
+} from "@/lib/dashboard/creator-financial-overrides";
 import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -47,6 +51,10 @@ interface PerformanceTableProps {
   ) => void;
   onOpenSubmitVideosForCreator: (creatorId: string) => void;
   onDeleteCreatorTargets: (creatorId: string) => void | Promise<void>;
+  onPersistHanindoPercent: (
+    creatorId: string,
+    percent: number,
+  ) => void | Promise<void>;
 }
 
 export function PerformanceTable({
@@ -63,9 +71,18 @@ export function PerformanceTable({
   onToggleAllVideoSubmitTargets,
   onOpenSubmitVideosForCreator,
   onDeleteCreatorTargets,
+  onPersistHanindoPercent,
 }: PerformanceTableProps) {
-  const { snapshot: hanindoPctByCreator, defaultPercent: defaultHanindoPct } =
-    useCreatorHanindoPercents();
+  const { snapshot: hanindoLocalSnapshot } = useCreatorHanindoPercents();
+  const hanindoPctByCreator = useMemo(
+    () => mergeHanindoPercentsFromCreators(creators, hanindoLocalSnapshot),
+    [creators, hanindoLocalSnapshot],
+  );
+  const defaultHanindoPct = DEFAULT_HANINDO_SHARING_PERCENT;
+  const resolveHanindoPercent = useCallback(
+    (id: string) => hanindoPctByCreator[id] ?? defaultHanindoPct,
+    [hanindoPctByCreator, defaultHanindoPct],
+  );
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [editCtx, setEditCtx] = useState<{
     creatorId: string;
@@ -489,6 +506,8 @@ export function PerformanceTable({
         creatorName={editCtx?.creatorName ?? ""}
         rows={editCtx?.rows ?? []}
         tableSegments={tableSegments}
+        resolveHanindoPercent={resolveHanindoPercent}
+        onPersistHanindoPercent={onPersistHanindoPercent}
         onSave={onUpdateTargetRows}
       />
     </div>

@@ -134,6 +134,18 @@ async function syncStoredFormEntitiesToSupabaseOnce(
         organization_id: c.organizationId || orgId,
         brand_ids: c.brandIds ?? [],
         creator_type: c.creatorType,
+        ...(c.hanindoSharingPercent != null &&
+        Number.isFinite(c.hanindoSharingPercent)
+          ? {
+              hanindo_sharing_percent: Math.min(
+                50,
+                Math.max(
+                  0,
+                  Math.round(Number(c.hanindoSharingPercent) * 10) / 10,
+                ),
+              ),
+            }
+          : {}),
       },
       { onConflict: "id" },
     );
@@ -206,6 +218,9 @@ export async function fetchDashboardData(
     organizationId: (r.organization_id as string) ?? "",
     brandIds: ((r.brand_ids as string[]) ?? []).map(String),
     creatorType: r.creator_type as Creator["creatorType"],
+    hanindoSharingPercent: num(
+      (r as { hanindo_sharing_percent?: unknown }).hanindo_sharing_percent,
+    ),
   }));
 
   const campaignObjectives: CampaignObjective[] = (campRows ?? []).map(
@@ -298,6 +313,26 @@ async function persistTargetsOnce(
     onConflict: "id",
   });
   if (error) throw error;
+}
+
+/** Simpan % Hanindo (0–50) untuk kolom [HND] di baris `creators`. */
+export async function persistCreatorHanindoSharingPercent(
+  supabase: SupabaseClient,
+  creatorId: string,
+  percent: number,
+): Promise<void> {
+  const p = Math.min(
+    50,
+    Math.max(0, Math.round(Number(percent) * 10) / 10),
+  );
+  return withPostgrestSchemaRetry(supabase, async () => {
+    const { error } = await supabase
+      .from("creators")
+      .update({ hanindo_sharing_percent: p })
+      .eq("id", creatorId)
+      .eq("user_id", SHARED_DASHBOARD_USER_ID);
+    if (error) throw error;
+  });
 }
 
 export async function deleteTargetsByIds(

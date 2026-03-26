@@ -19,7 +19,6 @@ import {
   formatBasePayLabel,
 } from "@/lib/dashboard/base-pay-presets";
 import type { CreatorTargetRowSave } from "@/lib/dashboard/merge-targets";
-import { getHanindoPercentForCreator } from "@/lib/dashboard/creator-financial-overrides";
 import { normalizeTargetTableSegmentForKey } from "@/lib/types";
 import { cn, formatCurrency } from "@/lib/utils";
 
@@ -47,6 +46,11 @@ interface EditCreatorTargetsDialogProps {
   creatorName: string;
   rows: EditTargetRowSnapshot[];
   tableSegments: TableSegmentOption[];
+  resolveHanindoPercent: (creatorId: string) => number;
+  onPersistHanindoPercent: (
+    creatorId: string,
+    percent: number,
+  ) => void | Promise<void>;
   onSave: (updates: CreatorTargetRowSave[]) => void | Promise<void>;
 }
 
@@ -63,8 +67,8 @@ const MAX_HND_PCT = 50;
 type AllocationPctDraft = { inc: number; tnc: number; hnd: number };
 
 function buildAllocationDraftFromRows(
-  creatorId: string,
   snapshotRows: EditTargetRowSnapshot[],
+  hanindoPctSaved: number,
 ): AllocationPctDraft {
   let er = 0;
   let inc = 0;
@@ -75,7 +79,7 @@ function buildAllocationDraftFromRows(
     er += tv * bp;
     inc += tv * ipv;
   }
-  const hndPctSaved = getHanindoPercentForCreator(creatorId);
+  const hndPctSaved = hanindoPctSaved;
   const rate = Math.min(MAX_HND_PCT, Math.max(0, hndPctSaved)) / 100;
   const { hndExpectedProfit } = splitErForTncHndColumns(er, inc, rate);
   if (er <= 0) {
@@ -99,6 +103,8 @@ export function EditCreatorTargetsDialog({
   creatorName,
   rows,
   tableSegments,
+  resolveHanindoPercent,
+  onPersistHanindoPercent,
   onSave,
 }: EditCreatorTargetsDialogProps) {
   const { setPercent, defaultPercent } = useCreatorHanindoPercents();
@@ -135,9 +141,11 @@ export function EditCreatorTargetsDialog({
       ),
     );
     if (creatorId) {
-      setDraftAllocationPct(buildAllocationDraftFromRows(creatorId, rows));
+      setDraftAllocationPct(
+        buildAllocationDraftFromRows(rows, resolveHanindoPercent(creatorId)),
+      );
     }
-  }, [open, rows, creatorId]);
+  }, [open, rows, creatorId, resolveHanindoPercent]);
 
   const allocationPreview = useMemo(() => {
     let er = 0;
@@ -198,6 +206,11 @@ export function EditCreatorTargetsDialog({
 
     if (creatorId) {
       setPercent(creatorId, draftAllocationPct.hnd);
+      try {
+        await onPersistHanindoPercent(creatorId, draftAllocationPct.hnd);
+      } catch {
+        return;
+      }
     }
 
     if (updates.length === 0) {

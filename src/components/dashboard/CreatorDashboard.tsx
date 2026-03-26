@@ -29,7 +29,10 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCreatorDashboard } from "@/hooks/useCreatorDashboard";
 import { useFormSettings } from "@/hooks/useFormSettings";
-import { syncStoredFormEntitiesToSupabase } from "@/lib/dashboard/supabase-data";
+import {
+  persistCreatorHanindoSharingPercent,
+  syncStoredFormEntitiesToSupabase,
+} from "@/lib/dashboard/supabase-data";
 import {
   mergeBrands,
   mergeCreators,
@@ -37,6 +40,7 @@ import {
   mergeTikTokAccounts,
 } from "@/lib/dashboard/merge-entities";
 import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
 
 export function CreatorDashboard() {
   const supabase = useMemo(() => createClient(), []);
@@ -178,6 +182,26 @@ function CreatorDashboardInner({
   const mergedTiktok = useMemo(
     () => mergeTikTokAccounts(tiktokAccounts, formSettingsStored.tiktokAccounts),
     [tiktokAccounts, formSettingsStored.tiktokAccounts],
+  );
+
+  const persistHanindoPercent = useCallback(
+    async (creatorId: string, percent: number) => {
+      try {
+        await persistCreatorHanindoSharingPercent(
+          supabaseForm,
+          creatorId,
+          percent,
+        );
+        await reload();
+      } catch (e) {
+        toast.error("Gagal menyimpan % Hanindo", {
+          description:
+            e instanceof Error ? e.message : "Periksa koneksi dan coba lagi.",
+        });
+        throw e;
+      }
+    },
+    [supabaseForm, reload],
   );
 
   useEffect(() => {
@@ -409,6 +433,7 @@ function CreatorDashboardInner({
                   }
                   onOpenSubmitVideosForCreator={openSubmitVideosForCreator}
                   onDeleteCreatorTargets={requestDeleteCreatorTargets}
+                  onPersistHanindoPercent={persistHanindoPercent}
                 />
               </div>
             </>

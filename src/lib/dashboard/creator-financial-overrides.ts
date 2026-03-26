@@ -1,4 +1,5 @@
 import { HANINDO_SHARING_RATE_ON_TARGET_REVENUE } from "@/lib/dashboard/financial-rules";
+import type { Creator } from "@/lib/types";
 
 const STORAGE_KEY = "tnc-ternak-creator-hanindo-pct-v1";
 const CHANGED = "tnc-ternak-creator-hanindo-pct-changed";
@@ -14,6 +15,23 @@ export const DEFAULT_HANINDO_SHARING_PERCENT = Math.round(
 function clampPercent(p: number): number {
   if (!Number.isFinite(p)) return DEFAULT_HANINDO_SHARING_PERCENT;
   return Math.min(50, Math.max(0, Math.round(p * 10) / 10));
+}
+
+/** Gabung % dari baris Supabase (`creators`) dengan override localStorage (menang jika ada). */
+export function mergeHanindoPercentsFromCreators(
+  creators: Creator[],
+  localOverrides: Record<string, number>,
+): Record<string, number> {
+  const fromDb: Record<string, number> = {};
+  for (const c of creators) {
+    if (
+      c.hanindoSharingPercent != null &&
+      Number.isFinite(c.hanindoSharingPercent)
+    ) {
+      fromDb[c.id] = clampPercent(c.hanindoSharingPercent);
+    }
+  }
+  return { ...fromDb, ...localOverrides };
 }
 
 function parse(raw: string | null): StoreV1 {

@@ -25,6 +25,8 @@ export interface Creator {
   organizationId: string;
   brandIds: string[];
   creatorType: CreatorType;
+  /** 0–50: porsi Hanindo dari ER; null/undefined = pakai default app (15%). */
+  hanindoSharingPercent?: number | null;
 }
 
 export interface Project {

@@ -14,8 +14,23 @@ export function mergeById<T extends { id: string }>(fromDb: T[], fromSettings: T
   return [...map.values()];
 }
 
-export function mergeCreators(a: Creator[], b: Creator[]): Creator[] {
-  return mergeById(a, b);
+export function mergeCreators(fromDb: Creator[], fromSettings: Creator[]): Creator[] {
+  const map = new Map<string, Creator>();
+  for (const x of fromDb) map.set(x.id, x);
+  for (const x of fromSettings) {
+    const prev = map.get(x.id);
+    if (prev) {
+      map.set(x.id, {
+        ...prev,
+        ...x,
+        hanindoSharingPercent:
+          x.hanindoSharingPercent ?? prev.hanindoSharingPercent ?? null,
+      });
+    } else {
+      map.set(x.id, x);
+    }
+  }
+  return [...map.values()];
 }
 
 export function mergeProjects(a: Project[], b: Project[]): Project[] {
