@@ -1,3 +1,4 @@
+import { FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE } from "@/lib/dashboard/financial-rules";
 import type { CreatorTarget, TargetFormRow } from "@/lib/types";
 import {
   buildTargetCompositeKey,
@@ -10,6 +11,8 @@ import {
  *
  * - expected revenue = targetVideos × basePay
  * - incentives (total ke creator) = targetVideos × incentivePerVideo
+ * - expected profit: basis revenue = expected revenue; segmen meja FOLO memakai
+ *   porsi {@link FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE} sebelum kurangi insentif & reimb.
  */
 export function syncDerivedFinancials(t: CreatorTarget): CreatorTarget {
   const tv = Math.max(0, Math.floor(Number(t.targetVideos)) || 0);
@@ -17,7 +20,12 @@ export function syncDerivedFinancials(t: CreatorTarget): CreatorTarget {
   const ipv = Math.max(0, Math.floor(Number(t.incentivePerVideo)) || 0);
   const expectedRevenue = tv * bp;
   const incentives = tv * ipv;
-  const expectedProfit = expectedRevenue - incentives - t.reimbursements;
+  const seg = normalizeTargetTableSegmentForKey(t.tableSegmentId);
+  const profitRevenueBase =
+    seg === "folo"
+      ? expectedRevenue * FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE
+      : expectedRevenue;
+  const expectedProfit = profitRevenueBase - incentives - t.reimbursements;
   const actualProfit = t.actualRevenue - incentives - t.reimbursements;
   return {
     ...t,

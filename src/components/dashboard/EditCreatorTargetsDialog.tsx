@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
+import { splitErForTncHndColumns } from "@/hooks/useCreatorDashboard";
 import { flushSync } from "react-dom";
 import {
   Dialog,
@@ -17,8 +19,9 @@ import {
   formatBasePayLabel,
 } from "@/lib/dashboard/base-pay-presets";
 import type { CreatorTargetRowSave } from "@/lib/dashboard/merge-targets";
+import { getHanindoPercentForCreator } from "@/lib/dashboard/creator-financial-overrides";
 import { normalizeTargetTableSegmentForKey } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 
 export interface EditTargetRowSnapshot {
   targetId: string;
@@ -40,6 +43,7 @@ type RowValues = {
 interface EditCreatorTargetsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  creatorId: string;
   creatorName: string;
   rows: EditTargetRowSnapshot[];
   tableSegments: TableSegmentOption[];
@@ -51,15 +55,60 @@ const fieldClass =
 
 const selectClass = cn(fieldClass, "bulk-native-select");
 
+const clampPct = (n: number) =>
+  Math.min(100, Math.max(0, Math.round(n * 10) / 10));
+
+const MAX_HND_PCT = 50;
+
+type AllocationPctDraft = { inc: number; tnc: number; hnd: number };
+
+function buildAllocationDraftFromRows(
+  creatorId: string,
+  snapshotRows: EditTargetRowSnapshot[],
+): AllocationPctDraft {
+  let er = 0;
+  let inc = 0;
+  for (const r of snapshotRows) {
+    const tv = Math.max(0, Math.floor(Number(r.targetVideos)) || 0);
+    const bp = Math.max(0, Number(r.basePay) || 0);
+    const ipv = Math.max(0, Math.floor(Number(r.incentivePerVideo)) || 0);
+    er += tv * bp;
+    inc += tv * ipv;
+  }
+  const hndPctSaved = getHanindoPercentForCreator(creatorId);
+  const rate = Math.min(MAX_HND_PCT, Math.max(0, hndPctSaved)) / 100;
+  const { hndExpectedProfit } = splitErForTncHndColumns(er, inc, rate);
+  if (er <= 0) {
+    const h = Math.min(MAX_HND_PCT, clampPct(hndPctSaved));
+    return { inc: 0, tnc: clampPct(100 - h), hnd: h };
+  }
+  let incP = clampPct((inc / er) * 100);
+  let hndP = Math.min(
+    MAX_HND_PCT,
+    clampPct((hndExpectedProfit / er) * 100),
+  );
+  incP = Math.min(incP, 100 - hndP);
+  const tncP = clampPct(100 - incP - hndP);
+  return { inc: incP, tnc: tncP, hnd: hndP };
+}
+
 export function EditCreatorTargetsDialog({
   open,
   onOpenChange,
+  creatorId,
   creatorName,
   rows,
   tableSegments,
   onSave,
 }: EditCreatorTargetsDialogProps) {
+  const { setPercent, defaultPercent } = useCreatorHanindoPercents();
   const [values, setValues] = useState<Record<string, RowValues>>({});
+  const [draftAllocationPct, setDraftAllocationPct] =
+    useState<AllocationPctDraft>({
+      inc: 0,
+      tnc: 0,
+      hnd: defaultPercent,
+    });
   const [saving, setSaving] = useState(false);
 
   const basePayOptions = useMemo(() => {
@@ -85,7 +134,34 @@ export function EditCreatorTargetsDialog({
         ]),
       ),
     );
-  }, [open, rows]);
+    if (creatorId) {
+      setDraftAllocationPct(buildAllocationDraftFromRows(creatorId, rows));
+    }
+  }, [open, rows, creatorId]);
+
+  const allocationPreview = useMemo(() => {
+    let er = 0;
+    for (const r of rows) {
+      const v = values[r.targetId];
+      if (!v) continue;
+      const tv = Math.max(0, Math.floor(Number(v.targetVideos)) || 0);
+      const bp = Math.max(0, Number(v.basePay) || 0);
+      er += tv * bp;
+    }
+    const pct = draftAllocationPct;
+    const inc = er > 0 ? (er * pct.inc) / 100 : 0;
+    const tncExpectedProfit = er > 0 ? (er * pct.tnc) / 100 : 0;
+    const hndExpectedProfit = er > 0 ? (er * pct.hnd) / 100 : 0;
+    return {
+      er,
+      inc,
+      tncExpectedProfit,
+      hndExpectedProfit,
+      incPct: pct.inc,
+      tncPct: pct.tnc,
+      hndPctOfEr: pct.hnd,
+    };
+  }, [rows, values, draftAllocationPct]);
 
   const patchRow = (id: string, partial: Partial<RowValues>) => {
     setValues((v) => {
@@ -120,6 +196,10 @@ export function EditCreatorTargetsDialog({
       }
     }
 
+    if (creatorId) {
+      setPercent(creatorId, draftAllocationPct.hnd);
+    }
+
     if (updates.length === 0) {
       onOpenChange(false);
       return;
@@ -140,10 +220,132 @@ export function EditCreatorTargetsDialog({
         <DialogHeader>
           <DialogTitle>Edit target — {creatorName}</DialogTitle>
           <DialogDescription>
-            Ubah meja (Table), jumlah video target, base pay, dan incentive per video
-            per campaign. Expected revenue &amp; incentives dihitung ulang otomatis.
+            Ubah meja (Table), jumlah video target, base pay, incentive per video,
+            dan % Hanindo untuk kolom [HND]. Preview memakai identitas{" "}
+            <span className="text-foreground/90">ER = incentives + [TNC] + [HND]</span>.
           </DialogDescription>
         </DialogHeader>
+
+        {rows.length > 0 && creatorId ? (
+          <div className="space-y-3 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-3">
+            <div className="space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                Alokasi vs expected revenue (preview)
+              </p>
+              <p className="text-[10px] text-muted/90">
+                Tiga % di bawah ini selalu berjumlah 100%. Hanya % [HND] yang
+                disimpan ke pengaturan creator; incentives di data target tetap
+                dari kolom per baris.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                  Incentives (% dari ER)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  value={draftAllocationPct.inc}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (!Number.isFinite(n)) return;
+                    setDraftAllocationPct((p) => {
+                      const inc = Math.min(clampPct(n), 100 - p.hnd);
+                      const tnc = clampPct(100 - inc - p.hnd);
+                      return { inc, tnc, hnd: p.hnd };
+                    });
+                  }}
+                  disabled={saving}
+                  className={fieldClass}
+                  aria-label="Persentase incentives dari expected revenue"
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-neon-cyan/90">
+                  [TNC] (% dari ER)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  value={draftAllocationPct.tnc}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (!Number.isFinite(n)) return;
+                    setDraftAllocationPct((p) => {
+                      let tnc = Math.min(clampPct(n), 100 - p.inc);
+                      let hnd = clampPct(100 - p.inc - tnc);
+                      if (hnd > MAX_HND_PCT) {
+                        hnd = MAX_HND_PCT;
+                        tnc = clampPct(100 - p.inc - hnd);
+                      }
+                      return { inc: p.inc, tnc, hnd };
+                    });
+                  }}
+                  disabled={saving}
+                  className={fieldClass}
+                  aria-label="Persentase TNC dari expected revenue"
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-neon-purple/90">
+                  [HND] Hanindo (% dari ER)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_HND_PCT}
+                  step={0.1}
+                  value={draftAllocationPct.hnd}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (!Number.isFinite(n)) return;
+                    setDraftAllocationPct((p) => {
+                      const hnd = Math.min(
+                        clampPct(n),
+                        MAX_HND_PCT,
+                        100 - p.inc,
+                      );
+                      const tnc = clampPct(100 - p.inc - hnd);
+                      return { inc: p.inc, tnc, hnd };
+                    });
+                  }}
+                  disabled={saving}
+                  className={fieldClass}
+                  aria-label="Persentase Hanindo dari expected revenue"
+                />
+              </label>
+            </div>
+            <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1.5 text-xs tabular-nums">
+              <dt className="text-muted">Expected revenue</dt>
+              <dd className="text-right font-medium text-foreground">
+                {formatCurrency(allocationPreview.er)}
+              </dd>
+              <dt className="text-muted">
+                Incentives ({allocationPreview.incPct.toFixed(1)}% ER)
+              </dt>
+              <dd className="text-right text-foreground/90">
+                {formatCurrency(allocationPreview.inc)}
+              </dd>
+              <dt className="text-neon-cyan/90">
+                [TNC] ({allocationPreview.tncPct.toFixed(1)}% ER)
+              </dt>
+              <dd className="text-right text-neon-cyan/90">
+                {formatCurrency(allocationPreview.tncExpectedProfit)}
+              </dd>
+              <dt className="text-neon-purple/90">
+                [HND] ({allocationPreview.hndPctOfEr.toFixed(1)}% ER)
+              </dt>
+              <dd className="text-right text-neon-purple/90">
+                {formatCurrency(allocationPreview.hndExpectedProfit)}
+              </dd>
+            </dl>
+          </div>
+        ) : null}
 
         {rows.length === 0 ? (
           <p className="text-sm text-muted">

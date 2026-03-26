@@ -6,6 +6,7 @@ import {
   ensureWorkspaceDefaults,
   fetchDashboardData,
   persistTargets,
+  deleteTargetsByIds,
   seedDemoData,
   type DashboardBundle,
 } from "@/lib/dashboard/supabase-data";
@@ -20,7 +21,14 @@ import {
   formatSupabaseClientError,
   supabaseErrorDebugPayload,
 } from "@/lib/supabase/format-client-error";
+import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
 import { withPostgrestSchemaRetry } from "@/lib/supabase/postgrest-retry";
+import { DEFAULT_HANINDO_SHARING_PERCENT } from "@/lib/dashboard/creator-financial-overrides";
+import {
+  HANINDO_SHARING_RATE_ON_TARGET_REVENUE,
+  OVERVIEW_FOLO_SEGMENT_SHARE,
+  OVERVIEW_TNC_SEGMENT_SHARE,
+} from "@/lib/dashboard/financial-rules";
 import {
   TABLE_CHIP_OPTIONS,
   targetMatchesTableQuickFilter,
@@ -40,6 +48,24 @@ function labelTableSegment(raw: string): string {
   return TABLE_CHIP_OPTIONS.find((o) => o.id === seg)?.label ?? seg;
 }
 
+/**
+ * Alokasi perf table: ER = incentives + [TNC] + [HND], [HND] = hanindoRate × ER.
+ * hanindoRate: 0–0,5 (default dari konstant overview). Per creator bisa di localStorage.
+ */
+export function splitErForTncHndColumns(
+  expectedRevenue: number,
+  incentives: number,
+  hanindoRate: number = HANINDO_SHARING_RATE_ON_TARGET_REVENUE,
+): { tncExpectedProfit: number; hndExpectedProfit: number } {
+  const r = Math.max(
+    0,
+    Math.min(0.5, Number.isFinite(hanindoRate) ? hanindoRate : 0),
+  );
+  const hndExpectedProfit = r * expectedRevenue;
+  const tncExpectedProfit = expectedRevenue - incentives - hndExpectedProfit;
+  return { tncExpectedProfit, hndExpectedProfit };
+}
+
 export interface AggregatedCreatorRow {
   creatorId: string;
   targetVideos: number;
@@ -49,6 +75,10 @@ export interface AggregatedCreatorRow {
   incentives: number;
   reimbursements: number;
   expectedProfit: number;
+  /** Sisa ER − incentives − [HND] (identitas: ER = incentives + [TNC] + [HND]). */
+  tncExpectedProfit: number;
+  /** 15% × expected revenue creator (Hanindo). */
+  hndExpectedProfit: number;
   actualProfit: number;
   status: TargetStatus;
 }
@@ -108,6 +138,7 @@ function sumExpectedRevenueForTableSegment(
 }
 
 export function useCreatorDashboard() {
+  const { snapshot: hanindoPercentByCreator } = useCreatorHanindoPercents();
   const supabase = useMemo(() => createClient(), []);
 
   const [bundle, setBundle] = useState<DashboardBundle | null>(null);
@@ -221,20 +252,31 @@ export function useCreatorDashboard() {
       const rows = byCreator.get(cid) ?? [];
       const targetVideos = sum(rows.map((r) => r.targetVideos));
       const submittedVideos = sum(rows.map((r) => r.submittedVideos));
+      const creatorExpectedRevenue = sum(rows.map((r) => r.expectedRevenue));
+      const creatorIncentives = sum(rows.map((r) => r.incentives));
+      const hndPct =
+        hanindoPercentByCreator[cid] ?? DEFAULT_HANINDO_SHARING_PERCENT;
+      const { tncExpectedProfit, hndExpectedProfit } = splitErForTncHndColumns(
+        creatorExpectedRevenue,
+        creatorIncentives,
+        hndPct / 100,
+      );
       return {
         creatorId: cid,
         targetVideos,
         submittedVideos,
-        expectedRevenue: sum(rows.map((r) => r.expectedRevenue)),
+        expectedRevenue: creatorExpectedRevenue,
         actualRevenue: sum(rows.map((r) => r.actualRevenue)),
-        incentives: sum(rows.map((r) => r.incentives)),
+        incentives: creatorIncentives,
         reimbursements: sum(rows.map((r) => r.reimbursements)),
-        expectedProfit: sum(rows.map((r) => r.expectedProfit)),
+        expectedProfit: tncExpectedProfit + hndExpectedProfit,
+        tncExpectedProfit,
+        hndExpectedProfit,
         actualProfit: sum(rows.map((r) => r.actualProfit)),
         status: computeStatus(submittedVideos, targetVideos),
       };
     });
-  }, [filteredLeafTargets]);
+  }, [filteredLeafTargets, hanindoPercentByCreator]);
 
   const breakdownByCreator = useCallback(
     (creatorId: string): BreakdownRow[] => {
@@ -286,6 +328,8 @@ export function useCreatorDashboard() {
       incentives: sum(creatorRows.map((r) => r.incentives)),
       reimbursements: sum(creatorRows.map((r) => r.reimbursements)),
       expectedProfit: sum(creatorRows.map((r) => r.expectedProfit)),
+      tncExpectedProfit: sum(creatorRows.map((r) => r.tncExpectedProfit)),
+      hndExpectedProfit: sum(creatorRows.map((r) => r.hndExpectedProfit)),
       actualProfit: sum(creatorRows.map((r) => r.actualProfit)),
       status: "on_track",
     };
@@ -359,6 +403,22 @@ export function useCreatorDashboard() {
     [supabase, load],
   );
 
+  const handleDeleteCreatorTargets = useCallback(
+    async (creatorId: string) => {
+      const ids = breakdownByCreator(creatorId).map((b) => b.targetId);
+      if (ids.length === 0) return;
+      try {
+        await deleteTargetsByIds(supabase, ids);
+        toast.success("Target dihapus");
+        await load();
+      } catch (e) {
+        toast.error(formatSupabaseClientError(e));
+        await load();
+      }
+    },
+    [supabase, load, breakdownByCreator],
+  );
+
   const handleSubmitVideoUrls = useCallback(
     async (deltas: { targetId: string; addVideos: number }[]) => {
       const byId = new Map<string, number>();
@@ -410,13 +470,16 @@ export function useCreatorDashboard() {
     const allSegmentRevenue = sumExpectedRevenueForTableSegment(base, "all");
     const targetRevenue =
       tncSegmentRevenue + foloSegmentRevenue + allSegmentRevenue;
-    /** 50% total revenue TNC + 100% total revenue FOLO (expected revenue per segmen). */
-    const actualRevenue = 0.5 * tncSegmentRevenue + foloSegmentRevenue;
-    /** 15% × total revenue TNC Hanindo Ternak. */
-    const hanindoSharingTotal = tncSegmentRevenue * 0.15;
+    /** 50% revenue TNC + 54% revenue FOLO (expected per segmen, filter header). */
+    const tncRevenue =
+      OVERVIEW_TNC_SEGMENT_SHARE * tncSegmentRevenue +
+      OVERVIEW_FOLO_SEGMENT_SHARE * foloSegmentRevenue;
+    /** 15% × total target revenue (semua segmen). */
+    const hanindoSharingTotal =
+      HANINDO_SHARING_RATE_ON_TARGET_REVENUE * targetRevenue;
     return {
       targetRevenue,
-      actualRevenue,
+      tncRevenue,
       hanindoSharingTotal,
       tncSegmentRevenue,
       foloSegmentRevenue,
@@ -445,6 +508,7 @@ export function useCreatorDashboard() {
     hasRows: creatorRows.length > 0,
     handleSubmitTargets,
     handleUpdateTargetRows,
+    handleDeleteCreatorTargets,
     handleSubmitVideoUrls,
     loading,
     overviewStats,

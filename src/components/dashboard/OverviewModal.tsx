@@ -9,13 +9,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
+import {
+  HANINDO_SHARING_RATE_ON_TARGET_REVENUE,
+  OVERVIEW_FOLO_SEGMENT_SHARE,
+  OVERVIEW_TNC_SEGMENT_SHARE,
+} from "@/lib/dashboard/financial-rules";
 import { formatCurrency, labelMonth } from "@/lib/utils";
 
 export interface OverviewStats {
   targetRevenue: number;
-  /** 50% × revenue TNC + 100% × revenue FOLO (expected revenue per segmen). */
-  actualRevenue: number;
-  /** 15% × total expected revenue segmen TNC Hanindo Ternak. */
+  /** 50% × revenue TNC + 54% × revenue FOLO (expected per segmen). */
+  tncRevenue: number;
+  /** 15% × total target revenue (TNC + FOLO + All). */
   hanindoSharingTotal: number;
   tncSegmentRevenue: number;
   foloSegmentRevenue: number;
@@ -75,14 +80,14 @@ function OverviewFigures({
   reducedMotion: boolean;
 }) {
   const tr = stats.targetRevenue;
-  const ar = stats.actualRevenue;
+  const tncRev = stats.tncRevenue;
   const hst = stats.hanindoSharingTotal;
   const tnc = stats.tncSegmentRevenue;
   const folo = stats.foloSegmentRevenue;
   const allSeg = stats.allSegmentRevenue;
 
   const trA = useCountUpOnMount(tr, reducedMotion, 340);
-  const arA = useCountUpOnMount(ar, reducedMotion, 380);
+  const tncRevA = useCountUpOnMount(tncRev, reducedMotion, 380);
   const hstA = useCountUpOnMount(hst, reducedMotion, 400);
   const tncA = useCountUpOnMount(tnc, reducedMotion, 320);
   const foloA = useCountUpOnMount(folo, reducedMotion, 320);
@@ -104,14 +109,17 @@ function OverviewFigures({
       </div>
       <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Actual revenue
+          TNC revenue
         </p>
         <p className="mt-1 text-xl font-semibold tabular-nums text-neon-cyan">
-          {formatCurrency(arA)}
+          {formatCurrency(tncRevA)}
         </p>
         <p className="mt-2 text-xs text-muted">
-          50% dari total revenue TNC Hanindo Ternak + 100% dari total revenue FOLO
-          Ternak ({formatCurrency(0.5 * tnc)} + {formatCurrency(folo)}).
+          {Math.round(OVERVIEW_TNC_SEGMENT_SHARE * 100)}% dari total revenue TNC
+          Hanindo Ternak + {Math.round(OVERVIEW_FOLO_SEGMENT_SHARE * 100)}% dari
+          total revenue FOLO Ternak (
+          {formatCurrency(OVERVIEW_TNC_SEGMENT_SHARE * tnc)} +{" "}
+          {formatCurrency(OVERVIEW_FOLO_SEGMENT_SHARE * folo)}).
         </p>
       </div>
       <div className="rounded-xl border border-neon-purple/25 bg-neon-purple/10 px-4 py-3">
@@ -122,7 +130,10 @@ function OverviewFigures({
           {formatCurrency(hstA)}
         </p>
         <p className="mt-2 text-xs text-muted">
-          15% × total revenue TNC Hanindo Ternak ({formatCurrency(tnc)} × 15%).
+          {Math.round(HANINDO_SHARING_RATE_ON_TARGET_REVENUE * 100)}% × total
+          target revenue semua segmen (
+          {formatCurrency(tr)} ×{" "}
+          {Math.round(HANINDO_SHARING_RATE_ON_TARGET_REVENUE * 100)}%).
         </p>
       </div>
     </div>
@@ -131,7 +142,7 @@ function OverviewFigures({
 
 const EMPTY_STATS: OverviewStats = {
   targetRevenue: 0,
-  actualRevenue: 0,
+  tncRevenue: 0,
   hanindoSharingTotal: 0,
   tncSegmentRevenue: 0,
   foloSegmentRevenue: 0,

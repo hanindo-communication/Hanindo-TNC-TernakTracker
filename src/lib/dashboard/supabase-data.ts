@@ -300,6 +300,21 @@ async function persistTargetsOnce(
   if (error) throw error;
 }
 
+export async function deleteTargetsByIds(
+  supabase: SupabaseClient,
+  targetIds: string[],
+): Promise<void> {
+  if (targetIds.length === 0) return;
+  return withPostgrestSchemaRetry(supabase, async () => {
+    const { error } = await supabase
+      .from("creator_targets")
+      .delete()
+      .in("id", targetIds)
+      .eq("user_id", SHARED_DASHBOARD_USER_ID);
+    if (error) throw error;
+  });
+}
+
 /** Inserts demo rows sekali untuk workspace bersama. Idempotent jika sudah ada creator. */
 export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
   const wid = SHARED_DASHBOARD_USER_ID;

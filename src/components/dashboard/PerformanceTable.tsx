@@ -6,15 +6,18 @@ import {
   Film,
   Pencil,
   SlidersHorizontal,
+  Trash2,
 } from "lucide-react";
 import Image from "next/image";
 import { useState, type ReactNode } from "react";
 import type { Creator } from "@/lib/types";
+import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
 import { formatCurrency } from "@/lib/utils";
-import type {
-  AggregatedCreatorRow,
-  BreakdownRow,
-  TotalRow,
+import {
+  splitErForTncHndColumns,
+  type AggregatedCreatorRow,
+  type BreakdownRow,
+  type TotalRow,
 } from "@/hooks/useCreatorDashboard";
 import { CreatorTypeChip } from "@/components/dashboard/CreatorTypeChip";
 import { EditCreatorTargetsDialog } from "@/components/dashboard/EditCreatorTargetsDialog";
@@ -43,6 +46,7 @@ interface PerformanceTableProps {
     selected: boolean,
   ) => void;
   onOpenSubmitVideosForCreator: (creatorId: string) => void;
+  onDeleteCreatorTargets: (creatorId: string) => void | Promise<void>;
 }
 
 export function PerformanceTable({
@@ -58,9 +62,13 @@ export function PerformanceTable({
   onToggleVideoSubmitTarget,
   onToggleAllVideoSubmitTargets,
   onOpenSubmitVideosForCreator,
+  onDeleteCreatorTargets,
 }: PerformanceTableProps) {
+  const { snapshot: hanindoPctByCreator, defaultPercent: defaultHanindoPct } =
+    useCreatorHanindoPercents();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [editCtx, setEditCtx] = useState<{
+    creatorId: string;
     creatorName: string;
     rows: {
       targetId: string;
@@ -104,7 +112,7 @@ export function PerformanceTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="min-w-[1100px] w-full border-collapse text-sm">
+        <table className="min-w-[1220px] w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-white/[0.06] bg-white/[0.02]">
               <th className={cn(th, "sticky left-0 z-20 min-w-[220px] bg-[#070c18]/95 backdrop-blur")}>
@@ -116,7 +124,24 @@ export function PerformanceTable({
               <th className={th}>Actual Revenue</th>
               <th className={th}>Incentives</th>
               <th className={th}>Reimbursements</th>
-              <th className={th}>Expected Profit</th>
+              <th
+                className={cn(th, "min-w-[108px]")}
+                title="ER − incentives − [HND]; dengan ER = incentives + [TNC] + [HND]"
+              >
+                <span className="block text-[9px] font-semibold normal-case tracking-normal text-neon-cyan/85">
+                  [TNC]
+                </span>
+                <span className="block tracking-[0.14em]">Exp. profit</span>
+              </th>
+              <th
+                className={cn(th, "min-w-[108px]")}
+                title="15% × expected revenue (Hanindo); ER = incentives + [TNC] + [HND]"
+              >
+                <span className="block text-[9px] font-semibold normal-case tracking-normal text-neon-purple/85">
+                  [HND]
+                </span>
+                <span className="block tracking-[0.14em]">Exp. profit</span>
+              </th>
             </tr>
           </thead>
 
@@ -191,25 +216,26 @@ export function PerformanceTable({
                         <div className="mt-1">
                           <CreatorTypeChip type={c.creatorType} />
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-1">
+                        <div className="mt-2 grid w-full min-w-0 grid-cols-2 gap-1">
                           <RowMiniAction
-                            icon={<Eye className="h-3 w-3" />}
+                            icon={<Eye className="h-3 w-3 shrink-0" />}
                             text="Details"
                             onClick={() => onCreatorClick(row.creatorId)}
                           />
                           <RowMiniAction
-                            icon={<Film className="h-3 w-3" />}
+                            icon={<Film className="h-3 w-3 shrink-0" />}
                             text="Videos"
                             onClick={() =>
                               onOpenSubmitVideosForCreator(row.creatorId)
                             }
                           />
                           <RowMiniAction
-                            icon={<Pencil className="h-3 w-3" />}
+                            icon={<Pencil className="h-3 w-3 shrink-0" />}
                             text="Edit"
                             onClick={() => {
                               const b = breakdownByCreator(row.creatorId);
                               setEditCtx({
+                                creatorId: row.creatorId,
                                 creatorName: c.name,
                                 rows: b.map((x) => ({
                                   targetId: x.targetId,
@@ -222,6 +248,14 @@ export function PerformanceTable({
                                 })),
                               });
                             }}
+                          />
+                          <RowMiniAction
+                            icon={<Trash2 className="h-3 w-3 shrink-0" />}
+                            text="Delete"
+                            variant="danger"
+                            onClick={() =>
+                              void onDeleteCreatorTargets(row.creatorId)
+                            }
                           />
                         </div>
                       </div>
@@ -245,13 +279,16 @@ export function PerformanceTable({
                   <td className="px-3 py-3 text-xs text-muted">
                     {formatCurrency(row.reimbursements)}
                   </td>
-                  <td className="px-3 py-3 text-xs text-neon-purple/90">
-                    {formatCurrency(row.expectedProfit)}
+                  <td className="px-3 py-3 text-xs text-neon-cyan/90 tabular-nums">
+                    {formatCurrency(row.tncExpectedProfit)}
+                  </td>
+                  <td className="px-3 py-3 text-xs text-neon-purple/90 tabular-nums">
+                    {formatCurrency(row.hndExpectedProfit)}
                   </td>
                 </tr>
 
                 <tr className="border-b-0 bg-white/[0.015]">
-                  <td colSpan={8} className="p-0">
+                  <td colSpan={9} className="p-0">
                     <div
                       className={cn(
                         "perf-expand-inner grid transition-[grid-template-rows] duration-300 ease-out",
@@ -322,10 +359,32 @@ export function PerformanceTable({
                                   <th className="px-3 py-2 text-left">
                                     Act. Rev
                                   </th>
+                                  <th
+                                    className="whitespace-nowrap px-2 py-2 text-left text-neon-cyan/80"
+                                    title="ER − incentives − [HND] per baris"
+                                  >
+                                    [TNC] Exp.
+                                  </th>
+                                  <th
+                                    className="whitespace-nowrap px-2 py-2 text-left text-neon-purple/80"
+                                    title="15% × ER baris"
+                                  >
+                                    [HND] Exp.
+                                  </th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {breakdown.map((b) => (
+                                {breakdown.map((b) => {
+                                  const hndRate =
+                                    (hanindoPctByCreator[b.creatorId] ??
+                                      defaultHanindoPct) / 100;
+                                  const { tncExpectedProfit, hndExpectedProfit } =
+                                    splitErForTncHndColumns(
+                                      b.expectedRevenue,
+                                      b.incentives,
+                                      hndRate,
+                                    );
+                                  return (
                                   <tr
                                     key={b.targetId}
                                     className="border-t border-white/[0.04]"
@@ -364,8 +423,15 @@ export function PerformanceTable({
                                     <td className="px-3 py-2">
                                       {formatCurrency(b.actualRevenue)}
                                     </td>
+                                    <td className="px-2 py-2 tabular-nums text-neon-cyan/85">
+                                      {formatCurrency(tncExpectedProfit)}
+                                    </td>
+                                    <td className="px-2 py-2 tabular-nums text-neon-purple/85">
+                                      {formatCurrency(hndExpectedProfit)}
+                                    </td>
                                   </tr>
-                                ))}
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -402,8 +468,11 @@ export function PerformanceTable({
                 <td className="px-3 py-4 text-sm font-bold">
                   {formatCurrency(totalRow.reimbursements)}
                 </td>
-                <td className="px-3 py-4 text-sm font-bold text-neon-purple">
-                  {formatCurrency(totalRow.expectedProfit)}
+                <td className="px-3 py-4 text-sm font-bold tabular-nums text-neon-cyan">
+                  {formatCurrency(totalRow.tncExpectedProfit)}
+                </td>
+                <td className="px-3 py-4 text-sm font-bold tabular-nums text-neon-purple">
+                  {formatCurrency(totalRow.hndExpectedProfit)}
                 </td>
               </tr>
             </tfoot>
@@ -416,6 +485,7 @@ export function PerformanceTable({
         onOpenChange={(o) => {
           if (!o) setEditCtx(null);
         }}
+        creatorId={editCtx?.creatorId ?? ""}
         creatorName={editCtx?.creatorName ?? ""}
         rows={editCtx?.rows ?? []}
         tableSegments={tableSegments}
@@ -429,10 +499,12 @@ function RowMiniAction({
   icon,
   text,
   onClick,
+  variant = "default",
 }: {
   icon: ReactNode;
   text: string;
   onClick: () => void;
+  variant?: "default" | "danger";
 }) {
   return (
     <button
@@ -441,10 +513,15 @@ function RowMiniAction({
         e.stopPropagation();
         onClick();
       }}
-      className="pointer-events-auto inline-flex items-center gap-1 rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-foreground/90 shadow-sm backdrop-blur transition hover:border-neon-cyan/40 hover:text-neon-cyan"
+      className={cn(
+        "pointer-events-auto inline-flex w-full min-w-0 items-center justify-center gap-1 rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-foreground/90 shadow-sm backdrop-blur transition",
+        variant === "danger"
+          ? "hover:border-red-400/45 hover:text-red-300"
+          : "hover:border-neon-cyan/40 hover:text-neon-cyan",
+      )}
     >
       {icon}
-      {text}
+      <span className="whitespace-nowrap">{text}</span>
     </button>
   );
 }

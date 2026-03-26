@@ -18,6 +18,14 @@ import { PerformanceTable } from "@/components/dashboard/PerformanceTable";
 import { QuickFilterChips } from "@/components/dashboard/QuickFilterChips";
 import { SubmitTargetsModal } from "@/components/dashboard/SubmitTargetsModal";
 import { SubmitVideosModal } from "@/components/dashboard/SubmitVideosModal";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCreatorDashboard } from "@/hooks/useCreatorDashboard";
 import { useFormSettings } from "@/hooks/useFormSettings";
@@ -141,6 +149,7 @@ function CreatorDashboardInner({
     hasRows,
     handleSubmitTargets,
     handleUpdateTargetRows,
+    handleDeleteCreatorTargets,
     handleSubmitVideoUrls,
     targets,
     campaignObjectives,
@@ -193,6 +202,12 @@ function CreatorDashboardInner({
   >(() => new Set());
   const [videosModalOpen, setVideosModalOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    creatorId: string;
+    creatorName: string;
+    targetCount: number;
+    targetIds: string[];
+  } | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -239,6 +254,33 @@ function CreatorDashboardInner({
     },
     [breakdownByCreator],
   );
+
+  const requestDeleteCreatorTargets = useCallback(
+    (creatorId: string) => {
+      const ids = breakdownByCreator(creatorId).map((b) => b.targetId);
+      if (ids.length === 0) return;
+      const c = mergedCreators.find((x) => x.id === creatorId);
+      setDeleteConfirm({
+        creatorId,
+        creatorName: c?.name ?? "Creator",
+        targetCount: ids.length,
+        targetIds: ids,
+      });
+    },
+    [breakdownByCreator, mergedCreators],
+  );
+
+  const runConfirmedDeleteCreatorTargets = useCallback(async () => {
+    if (!deleteConfirm) return;
+    const { creatorId, targetIds } = deleteConfirm;
+    setDeleteConfirm(null);
+    await handleDeleteCreatorTargets(creatorId);
+    setVideoSubmitTargetIds((prev) => {
+      const next = new Set(prev);
+      for (const id of targetIds) next.delete(id);
+      return next;
+    });
+  }, [deleteConfirm, handleDeleteCreatorTargets]);
 
   const submitVideosAndClear = useCallback(
     async (deltas: { targetId: string; addVideos: number }[]) => {
@@ -366,6 +408,7 @@ function CreatorDashboardInner({
                     toggleAllVideoSubmitTargets
                   }
                   onOpenSubmitVideosForCreator={openSubmitVideosForCreator}
+                  onDeleteCreatorTargets={requestDeleteCreatorTargets}
                 />
               </div>
             </>
@@ -403,6 +446,47 @@ function CreatorDashboardInner({
             tableSegments={TABLE_CHIP_OPTIONS}
             onSubmitVideos={submitVideosAndClear}
           />
+
+          <Dialog
+            open={deleteConfirm !== null}
+            onOpenChange={(open) => {
+              if (!open) setDeleteConfirm(null);
+            }}
+          >
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Hapus target creator?</DialogTitle>
+                <DialogDescription>
+                  Anda akan menghapus{" "}
+                  <strong className="font-semibold text-foreground/90">
+                    {deleteConfirm?.targetCount ?? 0} baris target
+                  </strong>{" "}
+                  untuk{" "}
+                  <strong className="font-semibold text-foreground/90">
+                    {deleteConfirm?.creatorName}
+                  </strong>{" "}
+                  (bulan dan filter dashboard saat ini). Data di Supabase ikut
+                  terhapus dan tidak bisa dikembalikan.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="border-t border-white/10 pt-4 sm:justify-end sm:gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirm(null)}
+                  className="h-10 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-foreground transition hover:bg-white/[0.06]"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runConfirmedDeleteCreatorTargets()}
+                  className="btn-press h-10 rounded-xl border border-red-400/35 bg-red-500/15 px-5 text-sm font-semibold text-red-200 transition hover:border-red-400/55 hover:bg-red-500/25"
+                >
+                  Hapus permanen
+                </button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           <DataSettingsModal
             open={dataSettingsOpen}
