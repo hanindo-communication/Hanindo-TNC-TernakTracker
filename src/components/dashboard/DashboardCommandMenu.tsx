@@ -15,6 +15,7 @@ import {
   Target,
   Upload,
   Users,
+  Wallet,
 } from "lucide-react";
 import {
   Dialog,
@@ -28,6 +29,7 @@ export interface DashboardCommandMenuProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onOverview: () => void;
+  onPayout: () => void;
   onDataSettings: () => void;
   onSubmitTargets: () => void;
   showSubmitVideos: boolean;
@@ -41,6 +43,7 @@ export function DashboardCommandMenu({
   open,
   onOpenChange,
   onOverview,
+  onPayout,
   onDataSettings,
   onSubmitTargets,
   showSubmitVideos,
@@ -84,6 +87,14 @@ export function DashboardCommandMenu({
               >
                 <LayoutDashboard className="h-4 w-4 text-neon-cyan" />
                 Overview
+              </CommandItem>
+              <CommandItem
+                value="payout pembayaran bukti"
+                onSelect={() => run(onPayout)}
+                className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 aria-selected:bg-neon-cyan/15"
+              >
+                <Wallet className="h-4 w-4 text-amber-300/95" />
+                Payout
               </CommandItem>
               <CommandItem
                 value="data settings pengaturan"

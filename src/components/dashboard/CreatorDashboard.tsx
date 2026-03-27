@@ -17,6 +17,7 @@ import { DashboardKpiStrip } from "@/components/dashboard/DashboardKpiStrip";
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton";
 import { DataSettingsModal } from "@/components/dashboard/DataSettingsModal";
 import { OverviewModal } from "@/components/dashboard/OverviewModal";
+import { PayoutModal } from "@/components/dashboard/PayoutModal";
 import { PerformanceTable } from "@/components/dashboard/PerformanceTable";
 import { QuickFilterChips } from "@/components/dashboard/QuickFilterChips";
 import { SubmitTargetsModal } from "@/components/dashboard/SubmitTargetsModal";
@@ -173,6 +174,7 @@ function CreatorDashboardInner({
     getCreatorExpectedRevenueSeries,
     seedIfEmpty,
     reload,
+    hanindoPercentByCreator,
   } = useCreatorDashboard({ actorEmail: userEmail ?? null });
 
   const { stored: formSettingsStored, persist: persistFormSettings } =
@@ -269,6 +271,7 @@ function CreatorDashboardInner({
   const [targetsModalOpen, setTargetsModalOpen] = useState(false);
   const [dataSettingsOpen, setDataSettingsOpen] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
+  const [payoutOpen, setPayoutOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerCreatorId, setDrawerCreatorId] = useState<string | null>(null);
   const [videoSubmitTargetIds, setVideoSubmitTargetIds] = useState<
@@ -447,6 +450,7 @@ function CreatorDashboardInner({
                   showSubmitVideos={videoSubmitTargetIds.size > 0}
                   onSubmitVideos={() => setVideosModalOpen(true)}
                   onOverview={() => setOverviewOpen(true)}
+                  onPayout={() => setPayoutOpen(true)}
                   onDataSettings={() => setDataSettingsOpen(true)}
                   onSaveProject={() => void handleSaveProject()}
                   saveProjectPending={saveProjectBusy}
@@ -553,6 +557,13 @@ function CreatorDashboardInner({
             tableTotalPreviousMonth={totalRowPreviousMonth}
             previousMonthKey={prevMonthKey}
             sparkline={overviewTableSparkline}
+          />
+
+          <PayoutModal
+            open={payoutOpen}
+            onOpenChange={setPayoutOpen}
+            monthKey={selectedMonth}
+            creatorRows={creatorRows}
           />
 
           <SubmitTargetsModal
@@ -675,6 +686,7 @@ function CreatorDashboardInner({
             open={commandOpen}
             onOpenChange={setCommandOpen}
             onOverview={() => setOverviewOpen(true)}
+            onPayout={() => setPayoutOpen(true)}
             onDataSettings={() => setDataSettingsOpen(true)}
             onSubmitTargets={() => setTargetsModalOpen(true)}
             showSubmitVideos={videoSubmitTargetIds.size > 0}

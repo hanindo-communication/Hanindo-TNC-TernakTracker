@@ -775,6 +775,7 @@ export function useCreatorDashboard(options?: {
     campaignObjectives,
     tiktokAccounts,
     targets,
+    hanindoPercentByCreator,
     selectedMonth,
     setSelectedMonth,
     filters,

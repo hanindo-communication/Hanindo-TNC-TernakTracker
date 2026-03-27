@@ -13,6 +13,7 @@ import {
   Target,
   Upload,
   User,
+  Wallet,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { DashboardFilters } from "@/lib/types";
@@ -41,6 +42,7 @@ interface DashboardHeaderProps {
   showSubmitVideos?: boolean;
   onSubmitVideos?: () => void;
   onOverview: () => void;
+  onPayout: () => void;
   onDataSettings: () => void;
   /** Sinkronkan draft Data settings (lokal) ke Supabase + muat ulang bundle. */
   onSaveProject?: () => void;
@@ -62,6 +64,7 @@ export function DashboardHeader({
   showSubmitVideos = false,
   onSubmitVideos,
   onOverview,
+  onPayout,
   onDataSettings,
   onSaveProject,
   saveProjectPending = false,
@@ -108,100 +111,110 @@ export function DashboardHeader({
           <CommandPaletteHintStrip />
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-          <div className="relative flex items-center">
-            <input
-              ref={monthInputRef}
-              type="month"
-              value={selectedMonth}
-              onChange={(e) => onMonthChange(e.target.value)}
-              aria-hidden
-              tabIndex={-1}
-              className="pointer-events-none absolute h-0 w-0 opacity-0"
-            />
-            <button
-              type="button"
-              onClick={openMonthPicker}
-              className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 neon-border-hover transition hover:border-neon-cyan/35 hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-neon-cyan/35"
-              title="Pilih bulan & tahun (filter data target)"
-              aria-label={`Bulan laporan: ${labelMonth(selectedMonth)}. Buka kalender.`}
-            >
-              <CalendarRange className="h-4 w-4 shrink-0 text-neon-cyan" />
-              <span className="text-sm font-medium text-foreground tabular-nums">
+        <div className="flex w-full min-w-0 flex-col gap-4 lg:max-w-[min(100%,42rem)] lg:shrink-0 lg:items-end">
+          {/* Baris 1: filter waktu & entitas — satu baseline tinggi */}
+          <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+            <div className="relative flex shrink-0 items-center">
+              <input
+                ref={monthInputRef}
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => onMonthChange(e.target.value)}
+                aria-hidden
+                tabIndex={-1}
+                className="pointer-events-none absolute h-0 w-0 opacity-0"
+              />
+              <button
+                type="button"
+                onClick={openMonthPicker}
+                className="flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 text-sm font-medium text-foreground tabular-nums neon-border-hover transition hover:border-neon-cyan/35 hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-neon-cyan/35"
+                title="Pilih bulan & tahun (filter data target)"
+                aria-label={`Bulan laporan: ${labelMonth(selectedMonth)}. Buka kalender.`}
+              >
+                <CalendarRange className="h-4 w-4 shrink-0 text-neon-cyan" />
                 {labelMonth(selectedMonth)}
-              </span>
-            </button>
+              </button>
+            </div>
+            <FilterSelect
+              icon={<User className="h-4 w-4" />}
+              value={filters.creatorId}
+              onChange={(creatorId) =>
+                onFiltersChange({ ...filters, creatorId })
+              }
+              options={[{ id: "all", name: "All creators" }, ...creatorOptions]}
+            />
+            <FilterSelect
+              icon={<Target className="h-4 w-4" />}
+              value={filters.brandId}
+              onChange={(brandId) => onFiltersChange({ ...filters, brandId })}
+              options={[{ id: "all", name: "All brands" }, ...brandOptions]}
+            />
           </div>
 
-          <FilterSelect
-            icon={<User className="h-4 w-4" />}
-            value={filters.creatorId}
-            onChange={(creatorId) =>
-              onFiltersChange({ ...filters, creatorId })
-            }
-            options={[{ id: "all", name: "All creators" }, ...creatorOptions]}
-          />
-          <FilterSelect
-            icon={<Target className="h-4 w-4" />}
-            value={filters.brandId}
-            onChange={(brandId) => onFiltersChange({ ...filters, brandId })}
-            options={[{ id: "all", name: "All brands" }, ...brandOptions]}
-          />
-
-          <button
-            type="button"
-            onClick={onOverview}
-            className="action-glow-hover btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-neon-cyan/35 bg-neon-cyan/10 px-5 text-sm font-semibold text-neon-cyan hover:bg-neon-cyan/20 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50"
-          >
-            <LayoutDashboard className="h-4 w-4" />
-            Overview
-          </button>
-
-          <button
-            type="button"
-            onClick={onDataSettings}
-            className="action-glow-hover btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.05] px-5 text-sm font-semibold text-foreground hover:border-neon-purple/35 hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-neon-purple/30"
-          >
-            <Settings2 className="h-4 w-4" />
-            Data settings
-          </button>
-
-          {onSaveProject ? (
+          {/* Baris 2: navigasi & penyimpanan workspace */}
+          <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
             <button
               type="button"
-              onClick={onSaveProject}
-              disabled={saveProjectPending}
-              title="Simpan draft brand / project / creator / TikTok dari Data settings ke Supabase. Target & edit tabel sudah tersimpan otomatis saat Anda mengubahnya."
-              className="action-glow-hover btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-400/25 bg-emerald-500/10 px-5 text-sm font-semibold text-emerald-100/95 transition hover:border-emerald-400/40 hover:bg-emerald-500/18 focus:outline-none focus:ring-2 focus:ring-emerald-400/35 disabled:pointer-events-none disabled:opacity-55"
+              onClick={onOverview}
+              className="action-glow-hover btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-neon-cyan/35 bg-neon-cyan/10 px-4 text-sm font-semibold text-neon-cyan hover:bg-neon-cyan/20 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50"
             >
-              {saveProjectPending ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4 shrink-0" />
-              )}
-              Simpan proyek
+              <LayoutDashboard className="h-4 w-4" />
+              Overview
             </button>
-          ) : null}
-
-          {showSubmitVideos && onSubmitVideos ? (
             <button
               type="button"
-              onClick={onSubmitVideos}
-              className="btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-neon-cyan/45 bg-neon-cyan/12 px-5 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/20 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50"
+              onClick={onPayout}
+              className="action-glow-hover btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-4 text-sm font-semibold text-amber-100/95 hover:border-amber-400/45 hover:bg-amber-500/16 focus:outline-none focus:ring-2 focus:ring-amber-400/35"
+              title="Bukti pembayaran & ringkasan actual payout"
             >
-              <Upload className="h-4 w-4" />
-              Submit Videos
+              <Wallet className="h-4 w-4" />
+              Payout
             </button>
-          ) : null}
+            <button
+              type="button"
+              onClick={onDataSettings}
+              className="action-glow-hover btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/[0.05] px-4 text-sm font-semibold text-foreground hover:border-neon-purple/35 hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-neon-purple/30"
+            >
+              <Settings2 className="h-4 w-4" />
+              Data settings
+            </button>
+            {onSaveProject ? (
+              <button
+                type="button"
+                onClick={onSaveProject}
+                disabled={saveProjectPending}
+                title="Simpan draft brand / project / creator / TikTok dari Data settings ke Supabase. Target & edit tabel sudah tersimpan otomatis saat Anda mengubahnya."
+                className="action-glow-hover btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100/95 transition hover:border-emerald-400/40 hover:bg-emerald-500/18 focus:outline-none focus:ring-2 focus:ring-emerald-400/35 disabled:pointer-events-none disabled:opacity-55"
+              >
+                {saveProjectPending ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4 shrink-0" />
+                )}
+                Simpan proyek
+              </button>
+            ) : null}
+          </div>
 
-          <div className="inline-flex flex-wrap items-center gap-2">
+          {/* Baris 3: alur submit */}
+          <div className="flex w-full flex-wrap items-center gap-2 sm:justify-end">
+            {showSubmitVideos && onSubmitVideos ? (
+              <button
+                type="button"
+                onClick={onSubmitVideos}
+                className="btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-neon-cyan/45 bg-neon-cyan/12 px-4 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/20 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50"
+              >
+                <Upload className="h-4 w-4" />
+                Submit Videos
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onSubmitTargets}
               className={cn(
-                "btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold text-night",
+                "btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold text-night",
                 "bg-gradient-to-r from-neon-cyan via-cyan-300 to-neon-purple",
-                "shadow-[0_0_32px_rgba(50,230,255,0.35)]",
+                "shadow-[0_0_28px_rgba(50,230,255,0.32)]",
                 "transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-neon-cyan/60",
               )}
             >
@@ -212,7 +225,7 @@ export function DashboardHeader({
               <button
                 type="button"
                 onClick={onOpenActivityLog}
-                className="action-glow-hover btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] px-4 text-sm font-semibold text-foreground/90 transition hover:border-neon-cyan/35 hover:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-neon-cyan/30"
+                className="action-glow-hover btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/12 bg-white/[0.04] px-3.5 text-sm font-semibold text-foreground/90 transition hover:border-neon-cyan/35 hover:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-neon-cyan/30"
                 title="Riwayat siapa yang mengubah data workspace"
               >
                 <History className="h-4 w-4 shrink-0 text-neon-cyan/85" />
@@ -222,17 +235,17 @@ export function DashboardHeader({
           </div>
 
           {userEmail ? (
-            <div className="mt-2 flex flex-col items-stretch gap-2 sm:mt-3 sm:items-end sm:self-end">
-              <span className="max-w-[220px] truncate text-right text-xs text-muted">
+            <div className="flex w-full flex-wrap items-center justify-end gap-2 border-t border-white/[0.06] pt-3">
+              <span className="max-w-[min(100%,240px)] truncate text-right text-xs text-muted">
                 {userEmail}
               </span>
               {onSignOut ? (
                 <button
                   type="button"
                   onClick={onSignOut}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.04] px-4 text-xs font-semibold uppercase tracking-wide text-muted transition hover:border-red-400/40 hover:text-red-300"
+                  className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.04] px-3 text-xs font-semibold uppercase tracking-wide text-muted transition hover:border-red-400/40 hover:text-red-300"
                 >
-                  <LogOut className="h-4 w-4" />
+                  <LogOut className="h-3.5 w-3.5" />
                   Keluar
                 </button>
               ) : null}
@@ -277,7 +290,8 @@ function CommandPaletteHintStrip() {
         <kbd className="rounded border border-white/20 bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-foreground/90">
           K
         </kbd>{" "}
-        untuk palet perintah (overview, data settings, submit targets/video).
+        untuk palet perintah (overview, payout, data settings, submit
+        targets/video).
       </p>
       <button
         type="button"
