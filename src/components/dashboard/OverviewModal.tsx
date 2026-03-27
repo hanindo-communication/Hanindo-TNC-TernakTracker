@@ -9,34 +9,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
-import {
-  HANINDO_SHARING_RATE_ON_TARGET_REVENUE,
-  OVERVIEW_FOLO_SEGMENT_SHARE,
-  OVERVIEW_TNC_SEGMENT_SHARE,
-} from "@/lib/dashboard/financial-rules";
-import {
-  TABLE_SEGMENT_FOLO_LABEL,
-  TABLE_SEGMENT_TNC_LABEL,
-} from "@/lib/dashboard/table-segments";
-import { formatCurrency, labelMonth } from "@/lib/utils";
-
-export interface OverviewStats {
-  targetRevenue: number;
-  /** 50% × revenue Hanindo PCP + 54% × revenue FOLO Public (expected per segmen). */
-  tncRevenue: number;
-  /** 15% × total target revenue (semua segmen meja). */
-  hanindoSharingTotal: number;
-  tncSegmentRevenue: number;
-  foloSegmentRevenue: number;
-  /** Segmen kolom Table = All (belum ditempatkan ke meja Hanindo PCP / FOLO Public). */
-  allSegmentRevenue: number;
-}
+import type { TotalRow } from "@/hooks/useCreatorDashboard";
+import { MiniRevenueAreaChart } from "@/components/dashboard/MiniRevenueAreaChart";
+import { cn, formatCurrency, labelMonth } from "@/lib/utils";
 
 interface OverviewModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   monthKey: string;
-  stats: OverviewStats | null;
+  /** Total footer tabel (filter header + chip segmen). */
+  tableTotal: TotalRow | null;
+  tableTotalPreviousMonth: TotalRow | null;
+  previousMonthKey: string;
+  sparkline: { monthKey: string; targetRevenue: number }[];
 }
 
 function useCountUpOnMount(
@@ -76,93 +61,201 @@ function useCountUpOnMount(
   return reducedMotion ? target : v;
 }
 
-function OverviewFigures({
-  stats,
-  reducedMotion,
-}: {
-  stats: OverviewStats;
-  reducedMotion: boolean;
-}) {
-  const tr = stats.targetRevenue;
-  const tncRev = stats.tncRevenue;
-  const hst = stats.hanindoSharingTotal;
-  const tnc = stats.tncSegmentRevenue;
-  const folo = stats.foloSegmentRevenue;
-  const allSeg = stats.allSegmentRevenue;
+function monthOverMonthHintGeneric(
+  current: number,
+  previous: number,
+  previousLabel: string,
+  entityShortLabel: string,
+): { line: string; tone: "up" | "down" | "flat" | "new" } {
+  if (previous <= 0 && current <= 0) {
+    return {
+      line: `vs ${previousLabel}: belum ada ${entityShortLabel}.`,
+      tone: "flat",
+    };
+  }
+  if (previous <= 0 && current > 0) {
+    return {
+      line: `vs ${previousLabel}: bulan lalu Rp 0 — mulai ada ${entityShortLabel}.`,
+      tone: "new",
+    };
+  }
+  const pct = ((current - previous) / previous) * 100;
+  if (Math.abs(pct) < 0.05) {
+    return { line: `vs ${previousLabel}: stabil (~0%).`, tone: "flat" };
+  }
+  if (pct > 0) {
+    return {
+      line: `vs ${previousLabel}: naik ${pct.toFixed(1)}%.`,
+      tone: "up",
+    };
+  }
+  return {
+    line: `vs ${previousLabel}: turun ${Math.abs(pct).toFixed(1)}%.`,
+    tone: "down",
+  };
+}
 
-  const trA = useCountUpOnMount(tr, reducedMotion, 340);
-  const tncRevA = useCountUpOnMount(tncRev, reducedMotion, 380);
-  const hstA = useCountUpOnMount(hst, reducedMotion, 400);
-  const tncA = useCountUpOnMount(tnc, reducedMotion, 320);
-  const foloA = useCountUpOnMount(folo, reducedMotion, 320);
-  const allSegA = useCountUpOnMount(allSeg, reducedMotion, 320);
+function OverviewFigures({
+  tableTotal,
+  tableTotalPreviousMonth,
+  reducedMotion,
+  previousMonthKey,
+  sparkline,
+}: {
+  tableTotal: TotalRow | null;
+  tableTotalPreviousMonth: TotalRow | null;
+  reducedMotion: boolean;
+  previousMonthKey: string;
+  sparkline: { monthKey: string; targetRevenue: number }[];
+}) {
+  const expRev = tableTotal?.expectedRevenue ?? 0;
+  const tnc = tableTotal?.tncExpectedProfit ?? 0;
+  const hnd = tableTotal?.hndExpectedProfit ?? 0;
+
+  const prevExp = tableTotalPreviousMonth?.expectedRevenue ?? 0;
+  const prevTnc = tableTotalPreviousMonth?.tncExpectedProfit ?? 0;
+  const prevHnd = tableTotalPreviousMonth?.hndExpectedProfit ?? 0;
+
+  const expA = useCountUpOnMount(expRev, reducedMotion, 340);
+  const tncA = useCountUpOnMount(tnc, reducedMotion, 380);
+  const hndA = useCountUpOnMount(hnd, reducedMotion, 400);
+
+  const prevLabel = labelMonth(previousMonthKey);
+  const momEr = monthOverMonthHintGeneric(
+    expRev,
+    prevExp,
+    prevLabel,
+    "expected revenue",
+  );
+  const momTnc = monthOverMonthHintGeneric(
+    tnc,
+    prevTnc,
+    prevLabel,
+    "[TNC] exp. profit",
+  );
+  const momHnd = monthOverMonthHintGeneric(
+    hnd,
+    prevHnd,
+    prevLabel,
+    "[HND] exp. profit",
+  );
+
+  const areaPoints =
+    sparkline.length >= 2
+      ? sparkline.map((p) => ({
+          monthKey: p.monthKey,
+          value: p.targetRevenue,
+        }))
+      : [];
+
+  const noRows = !tableTotal;
 
   return (
     <div className="grid gap-4 pt-2">
+      {areaPoints.length >= 2 ? (
+        <div>
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
+            Trend expected revenue (6 bulan)
+          </p>
+          <MiniRevenueAreaChart
+            points={areaPoints}
+            ariaLabel="Grafik area expected revenue enam bulan terakhir sesuai filter tabel"
+            height={168}
+            reducedMotion={reducedMotion}
+          />
+        </div>
+      ) : null}
+      {noRows ? (
+        <p className="text-sm text-muted">
+          Tidak ada baris di tabel untuk kombinasi bulan dan filter saat ini —
+          angka ringkas di bawah adalah Rp 0.
+        </p>
+      ) : null}
       <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Target revenue
+          Expected revenue
         </p>
         <p className="mt-1 text-xl font-semibold tabular-nums text-foreground">
-          {formatCurrency(trA)}
+          {formatCurrency(expA)}
+        </p>
+        <p
+          className={cn(
+            "mt-1 text-xs font-medium",
+            momEr.tone === "up" && "text-emerald-400/95",
+            momEr.tone === "down" && "text-amber-300/95",
+            momEr.tone === "flat" && "text-muted",
+            momEr.tone === "new" && "text-neon-cyan/90",
+          )}
+        >
+          {momEr.line}
         </p>
         <p className="mt-2 text-xs text-muted">
-          {TABLE_SEGMENT_TNC_LABEL} {formatCurrency(tncA)} +{" "}
-          {TABLE_SEGMENT_FOLO_LABEL} {formatCurrency(foloA)}
-          {allSeg > 0 ? ` + All Creators ${formatCurrency(allSegA)}` : ""}.
+          Sama dengan total kolom <strong className="font-medium text-foreground/80">Expected revenue</strong>{" "}
+          pada footer tabel (filter creator/brand + chip segmen).
         </p>
       </div>
       <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          TNC revenue
+          [TNC] Exp. profit
         </p>
         <p className="mt-1 text-xl font-semibold tabular-nums text-neon-cyan">
-          {formatCurrency(tncRevA)}
+          {formatCurrency(tncA)}
+        </p>
+        <p
+          className={cn(
+            "mt-1 text-xs font-medium",
+            momTnc.tone === "up" && "text-emerald-400/95",
+            momTnc.tone === "down" && "text-amber-300/95",
+            momTnc.tone === "flat" && "text-muted",
+            momTnc.tone === "new" && "text-neon-cyan/90",
+          )}
+        >
+          {momTnc.line}
         </p>
         <p className="mt-2 text-xs text-muted">
-          {Math.round(OVERVIEW_TNC_SEGMENT_SHARE * 100)}% dari total revenue{" "}
-          {TABLE_SEGMENT_TNC_LABEL} +{" "}
-          {Math.round(OVERVIEW_FOLO_SEGMENT_SHARE * 100)}% dari total revenue{" "}
-          {TABLE_SEGMENT_FOLO_LABEL} (
-          {formatCurrency(OVERVIEW_TNC_SEGMENT_SHARE * tnc)} +{" "}
-          {formatCurrency(OVERVIEW_FOLO_SEGMENT_SHARE * folo)}).
+          Sama dengan total kolom{" "}
+          <strong className="font-medium text-neon-cyan/90">[TNC] Exp. profit</strong> pada
+          footer tabel.
         </p>
       </div>
       <div className="rounded-xl border border-neon-purple/25 bg-neon-purple/10 px-4 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Hanindo sharing total
+          [HND] Exp. profit
         </p>
         <p className="mt-1 text-2xl font-bold tabular-nums text-neon-purple">
-          {formatCurrency(hstA)}
+          {formatCurrency(hndA)}
+        </p>
+        <p
+          className={cn(
+            "mt-1 text-xs font-medium",
+            momHnd.tone === "up" && "text-emerald-400/95",
+            momHnd.tone === "down" && "text-amber-300/95",
+            momHnd.tone === "flat" && "text-muted",
+            momHnd.tone === "new" && "text-neon-cyan/90",
+          )}
+        >
+          {momHnd.line}
         </p>
         <p className="mt-2 text-xs text-muted">
-          {Math.round(HANINDO_SHARING_RATE_ON_TARGET_REVENUE * 100)}% × total
-          target revenue semua segmen (
-          {formatCurrency(tr)} ×{" "}
-          {Math.round(HANINDO_SHARING_RATE_ON_TARGET_REVENUE * 100)}%).
+          Sama dengan total kolom{" "}
+          <strong className="font-medium text-neon-purple/90">[HND] Exp. profit</strong> pada
+          footer (agregasi % Hanindo per creator pada baris yang tampil).
         </p>
       </div>
     </div>
   );
 }
 
-const EMPTY_STATS: OverviewStats = {
-  targetRevenue: 0,
-  tncRevenue: 0,
-  hanindoSharingTotal: 0,
-  tncSegmentRevenue: 0,
-  foloSegmentRevenue: 0,
-  allSegmentRevenue: 0,
-};
-
 export function OverviewModal({
   open,
   onOpenChange,
   monthKey,
-  stats,
+  tableTotal,
+  tableTotalPreviousMonth,
+  previousMonthKey,
+  sparkline,
 }: OverviewModalProps) {
   const reducedMotion = usePrefersReducedMotion();
-  const s = stats ?? EMPTY_STATS;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -174,27 +267,21 @@ export function OverviewModal({
             <span className="font-medium text-foreground">
               {labelMonth(monthKey)}
             </span>
-            . Angka memakai{" "}
-            <span className="font-medium text-foreground">
-              total revenue (expected)
-            </span>{" "}
-            per segmen meja{" "}
-            <span className="font-medium text-foreground">
-              {TABLE_SEGMENT_TNC_LABEL}
-            </span>{" "}
-            dan{" "}
-            <span className="font-medium text-foreground">
-              {TABLE_SEGMENT_FOLO_LABEL}
-            </span>,
-            mengikuti filter creator &amp; brand di header (bukan quick filter chip
-            di tabel).
+            . Ketiga angka utama menyamai{" "}
+            <span className="font-medium text-foreground">footer baris Total</span>{" "}
+            pada tabel performa — termasuk filter creator/brand di header dan{" "}
+            <span className="font-medium text-foreground">quick filter chip</span>{" "}
+            segmen meja.
           </DialogDescription>
         </DialogHeader>
         {open ? (
           <OverviewFigures
-            key={monthKey}
-            stats={s}
+            key={`${monthKey}-${tableTotal?.expectedRevenue ?? "empty"}`}
+            tableTotal={tableTotal}
+            tableTotalPreviousMonth={tableTotalPreviousMonth}
             reducedMotion={reducedMotion}
+            previousMonthKey={previousMonthKey}
+            sparkline={sparkline}
           />
         ) : null}
       </DialogContent>

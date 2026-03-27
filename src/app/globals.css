@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+html {
+  color-scheme: dark;
+}
+
 :root {
   --bg-deep: #050711;
   --bg-panel: #050b16;
@@ -52,25 +56,11 @@ body {
   font-family: var(--font-sans);
 }
 
-/* Native <select> dropdowns (esp. Windows/Chrome): dark list + readable options; matches dashboard tokens */
-.bulk-native-select {
-  background-color: var(--bg-panel);
-  color: var(--foreground);
-}
-
-.bulk-native-select:disabled {
-  opacity: 0.55;
-}
-
-.bulk-native-select option {
-  background-color: var(--bg-panel);
-  color: var(--foreground);
-}
-
-.bulk-native-select option:checked,
-.bulk-native-select option:hover {
-  background-color: rgba(50, 230, 255, 0.14);
-  color: var(--foreground);
+/* Input tanggal/bulan native: ikut skema gelap */
+input[type="month"],
+input[type="date"],
+input[type="datetime-local"] {
+  color-scheme: dark;
 }
 
 .font-display {
@@ -268,6 +258,51 @@ body {
 .overflow-x-auto::-webkit-scrollbar-thumb {
   background: rgba(50, 230, 255, 0.2);
   border-radius: 999px;
+}
+
+/* Performance table: sisi scroll + baris baru disimpan */
+@keyframes perf-row-flash {
+  0% {
+    background-color: rgba(50, 230, 255, 0.14);
+    box-shadow: inset 0 0 0 1px rgba(50, 230, 255, 0.4);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+.perf-row-saved-flash {
+  animation: perf-row-flash 2.1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.perf-table-scroll-wrap {
+  position: relative;
+}
+
+.perf-table-scroll-wrap::before,
+.perf-table-scroll-wrap::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  z-index: 25;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.perf-table-scroll-wrap.perf-scroll-fade-left::before {
+  opacity: 1;
+  left: 0;
+  background: linear-gradient(90deg, rgba(7, 12, 24, 0.97), transparent);
+}
+
+.perf-table-scroll-wrap.perf-scroll-fade-right::after {
+  opacity: 1;
+  right: 0;
+  background: linear-gradient(270deg, rgba(7, 12, 24, 0.97), transparent);
 }
 
 /* —— Login page: immersive background + motion —— */
@@ -516,6 +551,10 @@ body {
   }
 
   .action-glow-hover:hover {
+    animation: none !important;
+  }
+
+  .perf-row-saved-flash {
     animation: none !important;
   }
 

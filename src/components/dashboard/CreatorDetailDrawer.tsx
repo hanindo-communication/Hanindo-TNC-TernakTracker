@@ -4,17 +4,25 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import Image from "next/image";
 import type { Creator } from "@/lib/types";
-import { performanceHistory } from "@/lib/mock-data";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency, labelMonth } from "@/lib/utils";
 import { CreatorTypeChip } from "@/components/dashboard/CreatorTypeChip";
+import { MiniRevenueAreaChart } from "@/components/dashboard/MiniRevenueAreaChart";
 import type { AggregatedCreatorRow } from "@/hooks/useCreatorDashboard";
-import { cn } from "@/lib/utils";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
+
+function videoCompletionRatio(submitted: number, target: number): number {
+  if (target <= 0) return submitted > 0 ? 100 : 0;
+  return Math.min(100, (submitted / target) * 100);
+}
 
 interface CreatorDetailDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  creator: Creator | null;
-  aggregate: AggregatedCreatorRow | null;
+  creator: Creator;
+  aggregate: AggregatedCreatorRow;
+  aggregatePreviousMonth: AggregatedCreatorRow | null;
+  previousMonthKey: string;
+  revenueSeries: { monthKey: string; value: number }[];
 }
 
 export function CreatorDetailDrawer({
@@ -22,15 +30,32 @@ export function CreatorDetailDrawer({
   onOpenChange,
   creator,
   aggregate,
+  aggregatePreviousMonth,
+  previousMonthKey,
+  revenueSeries,
 }: CreatorDetailDrawerProps) {
-  if (!creator || !aggregate) return null;
+  const reducedMotion = usePrefersReducedMotion();
 
   const avatarSrc = (creator.avatarUrl ?? "").trim();
   const hasAvatar = avatarSrc.length > 0;
 
-  const series = performanceHistory[creator.id] ?? [
-    0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85,
-  ];
+  const chartPoints = revenueSeries.map((p) => ({
+    monthKey: p.monthKey,
+    value: p.value,
+  }));
+
+  const prevLabel = labelMonth(previousMonthKey);
+  const lastMoCompletion = aggregatePreviousMonth
+    ? videoCompletionRatio(
+        aggregatePreviousMonth.submittedVideos,
+        aggregatePreviousMonth.targetVideos,
+      )
+    : null;
+
+  const avgSixMo =
+    revenueSeries.length > 0
+      ? revenueSeries.reduce((a, p) => a + p.value, 0) / revenueSeries.length
+      : 0;
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -87,7 +112,7 @@ export function CreatorDetailDrawer({
 
             <div className="glass-panel rounded-2xl p-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">
-                This month snapshot
+                Bulan berjalan (sesuai filter meja)
               </p>
               <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                 <div>
@@ -119,23 +144,55 @@ export function CreatorDetailDrawer({
 
             <div>
               <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">
-                Performance trend (mock)
+                Expected revenue (6 bulan)
               </p>
-              <Sparkline values={series} />
+              {chartPoints.length >= 2 ? (
+                <MiniRevenueAreaChart
+                  points={chartPoints}
+                  ariaLabel={`Trend expected revenue enam bulan untuk ${creator.name}`}
+                  height={160}
+                  reducedMotion={reducedMotion}
+                />
+              ) : (
+                <p className="text-sm text-muted">
+                  Data per bulan belum cukup untuk grafik.
+                </p>
+              )}
             </div>
 
             <div className="glass-panel rounded-2xl p-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">
-                History (target vs actual)
+                Konteks
               </p>
               <ul className="mt-3 space-y-2 text-sm text-muted">
-                <li className="flex justify-between">
-                  <span>Last month</span>
-                  <span className="font-mono text-foreground/90">92%</span>
+                <li className="flex justify-between gap-3">
+                  <span>
+                    {prevLabel} (submit vs target)
+                  </span>
+                  <span className="shrink-0 font-mono text-foreground/90">
+                    {aggregatePreviousMonth ? (
+                      <>
+                        {aggregatePreviousMonth.submittedVideos} /{" "}
+                        {aggregatePreviousMonth.targetVideos}
+                        <span className="text-neon-cyan/90">
+                          {" "}
+                          (
+                          {(
+                            lastMoCompletion ?? 0
+                          ).toFixed(0)}
+                          %)
+                        </span>
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </span>
                 </li>
-                <li className="flex justify-between">
-                  <span>Quarter avg</span>
-                  <span className="font-mono text-foreground/90">88%</span>
+                <li className="flex justify-between gap-3">
+                  <span>Rata-rata ER (6 bln)</span>
+                  <span className="shrink-0 font-mono text-foreground/90">
+                    {avgSixMo > 0 ? formatCurrency(avgSixMo) : "—"}
+                  </span>
                 </li>
               </ul>
             </div>
@@ -143,68 +200,5 @@ export function CreatorDetailDrawer({
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
-  );
-}
-
-function Sparkline({ values }: { values: number[] }) {
-  const w = 320;
-  const h = 72;
-  const pad = 6;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = Math.max(1e-6, max - min);
-  const pts = values.map((v, i) => {
-    const x =
-      pad + (i / Math.max(1, values.length - 1)) * (w - pad * 2);
-    const y = pad + (1 - (v - min) / span) * (h - pad * 2);
-    return { x, y };
-  });
-  const d =
-    pts.length === 0
-      ? ""
-      : pts
-          .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`)
-          .join(" ");
-
-  return (
-    <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        className="h-24 w-full"
-        role="img"
-        aria-label="Performance sparkline"
-      >
-        <defs>
-          <linearGradient id="spark" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stopColor="#32e6ff" />
-            <stop offset="100%" stopColor="#a855f7" />
-          </linearGradient>
-        </defs>
-        <path
-          d={d}
-          fill="none"
-          stroke="url(#spark)"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {values.map((v, i) => {
-          const x =
-            pad + (i / Math.max(1, values.length - 1)) * (w - pad * 2);
-          const y =
-            pad + (1 - (v - min) / span) * (h - pad * 2);
-          return (
-            <circle
-              key={i}
-              cx={x}
-              cy={y}
-              r="2.5"
-              fill="#32e6ff"
-              opacity={0.85}
-            />
-          );
-        })}
-      </svg>
-    </div>
   );
 }

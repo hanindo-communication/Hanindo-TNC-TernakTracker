@@ -15,6 +15,8 @@ import type {
 import { CreatorPicker } from "@/components/dashboard/CreatorPicker";
 import { VideoUrlsTagInput } from "@/components/dashboard/VideoUrlsTagInput";
 import type { TableSegmentOption } from "@/components/dashboard/QuickFilterChips";
+import { AppSelect } from "@/components/ui/app-select";
+import { CREATOR_TYPE_SELECT_OPTIONS } from "@/lib/dashboard/creator-type-options";
 import { TABLE_SEGMENT_ALL_ID } from "@/lib/dashboard/table-segments";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +26,8 @@ const thBase =
   "whitespace-nowrap border-b border-white/15 bg-white/[0.06] px-2 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted";
 const fieldClass =
   "min-h-[2.25rem] w-full min-w-[7rem] rounded-md border border-white/10 bg-panel px-2 text-sm text-foreground outline-none transition [color-scheme:dark] focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
-const selectClass = cn(fieldClass, "bulk-native-select h-9");
+const selectTriggerClass =
+  "h-9 min-h-[2.25rem] w-full min-w-[7rem] border-white/10 bg-panel px-2 text-sm shadow-none hover:border-white/15 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
 
 function Req({ children }: { children: ReactNode }) {
   return (
@@ -234,100 +237,89 @@ function VideoBulkTableRow({
         )}
       </td>
       <td className={cn(cell, "min-w-[150px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.tableSegmentId}
-          onChange={(e) => onTableChange(e.target.value)}
+          onChange={onTableChange}
           disabled={disableIdentity}
           aria-label={`Table row ${rowIndex + 1}`}
-        >
-          {tableSegments.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+          options={tableSegments.map((s) => ({
+            value: s.id,
+            label: s.label,
+          }))}
+        />
       </td>
       <td className={cn(cell, "min-w-[140px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.projectId}
-          onChange={(e) => onProjectChange(e.target.value)}
+          onChange={onProjectChange}
           disabled={disableIdentity}
+          emptyLabel={
+            row.creatorId ? "Select project" : "Select creator first"
+          }
           aria-label={`Project row ${rowIndex + 1}`}
-        >
-          <option value="">
-            {row.creatorId ? "Select project" : "Select creator first"}
-          </option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          options={projects.map((p) => ({
+            value: p.id,
+            label: p.name,
+          }))}
+        />
       </td>
       <td className={cn(cell, "min-w-[160px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.campaignObjectiveId}
-          onChange={(e) => {
-            if (!disableIdentity) patch({ campaignObjectiveId: e.target.value });
+          onChange={(campaignObjectiveId) => {
+            if (!disableIdentity) patch({ campaignObjectiveId });
           }}
           disabled={disableIdentity}
+          emptyLabel={
+            row.projectId ? "Select objective" : "Select project first"
+          }
           aria-label={`Campaign objective row ${rowIndex + 1}`}
-        >
-          <option value="">
-            {row.projectId ? "Select objective" : "Select project first"}
-          </option>
-          {campaignObjectives.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          options={campaignObjectives.map((o) => ({
+            value: o.id,
+            label: o.label,
+          }))}
+        />
       </td>
       <td className={cn(cell, "min-w-[120px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.creatorType}
-          onChange={(e) => {
+          onChange={(creatorType) => {
             if (locked) return;
             patch({
-              creatorType: e.target.value as CreatorType,
+              creatorType: creatorType as CreatorType,
             });
           }}
           disabled={disableIdentity}
           aria-label={`Creator type row ${rowIndex + 1}`}
-        >
-          <option value="Internal">Internal</option>
-          <option value="External">External</option>
-          <option value="AssetLoan">Asset Loan</option>
-        </select>
+          options={[...CREATOR_TYPE_SELECT_OPTIONS]}
+        />
       </td>
       <td className={cn(cell, "min-w-[160px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.tiktokAccountId}
-          onChange={(e) => {
-            if (!disableIdentity) patch({ tiktokAccountId: e.target.value });
+          onChange={(tiktokAccountId) => {
+            if (!disableIdentity) patch({ tiktokAccountId });
           }}
           disabled={disableIdentity || !row.creatorId}
+          emptyLabel={
+            row.creatorId ? "Select TikTok account" : "Select creator first"
+          }
           aria-label={`TikTok account row ${rowIndex + 1}`}
-        >
-          <option value="">
-            {row.creatorId ? "Select TikTok account" : "Select creator first"}
-          </option>
-          {accountsForCreator.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
-            </option>
-          ))}
-        </select>
+          options={accountsForCreator.map((t) => ({
+            value: t.id,
+            label: t.label,
+          }))}
+        />
       </td>
       <td className={cn(cell, "min-w-[130px]")}>
         <input
           type="month"
-          className={cn(selectClass, "font-sans")}
+          className={cn(fieldClass, "h-9 font-sans")}
           value={row.month}
           onChange={(e) => {
             if (!disableIdentity) patch({ month: e.target.value });

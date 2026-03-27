@@ -26,6 +26,15 @@ export function DashboardSkeleton() {
         ))}
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-3">
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="h-28 rounded-2xl border border-white/[0.06] bg-white/[0.02] skeleton-shimmer"
+          />
+        ))}
+      </div>
+
       <div className="overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02]">
         <div className="h-12 border-b border-white/[0.06] skeleton-shimmer" />
         <div className="divide-y divide-white/[0.04] px-2 py-2">

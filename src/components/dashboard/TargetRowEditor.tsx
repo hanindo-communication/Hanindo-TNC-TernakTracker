@@ -10,9 +10,14 @@ import type {
 } from "@/lib/types";
 import { CreatorPicker } from "@/components/dashboard/CreatorPicker";
 import { OptionalNonNegIntInput } from "@/components/dashboard/OptionalNonNegIntInput";
+import { AppSelect } from "@/components/ui/app-select";
+import { CREATOR_TYPE_SELECT_OPTIONS } from "@/lib/dashboard/creator-type-options";
 
 const inputClass =
   "h-10 w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-foreground outline-none transition focus:border-neon-cyan/55 focus:ring-2 focus:ring-neon-cyan/20";
+
+const rowSelectTriggerClass =
+  "h-10 w-full rounded-lg border-white/10 bg-white/[0.04] px-3 text-sm shadow-none hover:border-white/15 focus:border-neon-cyan/55 focus:ring-2 focus:ring-neon-cyan/20";
 
 interface TargetRowEditorProps {
   row: TargetFormRow;
@@ -71,58 +76,51 @@ export function TargetRowEditor({
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
           Campaign
         </label>
-        <select
-          className={inputClass}
+        <AppSelect
+          className={rowSelectTriggerClass}
           value={row.projectId}
-          onChange={(e) => patch({ projectId: e.target.value })}
-        >
-          <option value="">Select campaign…</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          onChange={(projectId) => patch({ projectId })}
+          emptyLabel="Select campaign…"
+          options={projects.map((p) => ({
+            value: p.id,
+            label: p.name,
+          }))}
+        />
       </div>
 
       <div className="md:col-span-2">
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
           Creator type
         </label>
-        <select
-          className={inputClass}
+        <AppSelect
+          className={rowSelectTriggerClass}
           value={row.creatorType}
-          onChange={(e) => {
-            const creatorType = e.target.value as CreatorType;
+          onChange={(v) => {
+            const creatorType = v as CreatorType;
             patch({
               creatorType,
               basePay: defaultBasePay(creatorType),
             });
           }}
-        >
-          <option value="Internal">Internal</option>
-          <option value="External">External</option>
-          <option value="AssetLoan">Asset Loan</option>
-        </select>
+          options={[...CREATOR_TYPE_SELECT_OPTIONS]}
+        />
       </div>
 
       <div className="md:col-span-2">
         <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
           TikTok account
         </label>
-        <select
-          className={inputClass}
+        <AppSelect
+          className={rowSelectTriggerClass}
           value={row.tiktokAccountId}
-          onChange={(e) => patch({ tiktokAccountId: e.target.value })}
+          onChange={(tiktokAccountId) => patch({ tiktokAccountId })}
           disabled={!row.creatorId}
-        >
-          <option value="">Select…</option>
-          {accountsForCreator.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
-            </option>
-          ))}
-        </select>
+          emptyLabel="Select…"
+          options={accountsForCreator.map((t) => ({
+            value: t.id,
+            label: t.label,
+          }))}
+        />
       </div>
 
       <div className="md:col-span-1">

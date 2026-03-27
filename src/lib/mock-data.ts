@@ -183,10 +183,3 @@ export const initialTargets: CreatorTarget[] = [
     actualProfit: 1130,
   },
 ];
-
-/** Mock sparkline points (normalized 0–1) per creator */
-export const performanceHistory: Record<string, number[]> = {
-  "cr-1": [0.35, 0.42, 0.5, 0.55, 0.62, 0.7, 0.78, 0.85, 0.9, 0.95],
-  "cr-2": [0.5, 0.48, 0.52, 0.45, 0.5, 0.55, 0.5, 0.48, 0.52, 0.54],
-  "cr-3": [0.2, 0.28, 0.35, 0.42, 0.5, 0.58, 0.65, 0.72, 0.8, 0.88],
-};

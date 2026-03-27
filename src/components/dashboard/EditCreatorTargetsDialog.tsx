@@ -20,7 +20,9 @@ import {
 } from "@/lib/dashboard/base-pay-presets";
 import type { CreatorTargetRowSave } from "@/lib/dashboard/merge-targets";
 import { normalizeTargetTableSegmentForKey } from "@/lib/types";
-import { cn, formatCurrency } from "@/lib/utils";
+import { AppSelect } from "@/components/ui/app-select";
+import { Spinner } from "@/components/ui/spinner";
+import { formatCurrency } from "@/lib/utils";
 
 export interface EditTargetRowSnapshot {
   targetId: string;
@@ -52,12 +54,15 @@ interface EditCreatorTargetsDialogProps {
     percent: number,
   ) => void | Promise<void>;
   onSave: (updates: CreatorTargetRowSave[]) => void | Promise<void>;
+  /** Dipanggil setelah simpan berhasil (termasuk hanya % Hanindo tanpa baris target). */
+  onSaveSuccess?: () => void;
 }
 
 const fieldClass =
   "h-9 w-full min-w-0 rounded-md border border-white/10 bg-white/[0.04] px-2 text-sm text-foreground outline-none transition focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25 [color-scheme:dark]";
 
-const selectClass = cn(fieldClass, "bulk-native-select");
+const editSelectTriggerClass =
+  "h-9 w-full min-w-0 border-white/10 bg-white/[0.04] px-2 text-sm shadow-none hover:border-white/12 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
 
 const clampPct = (n: number) =>
   Math.min(100, Math.max(0, Math.round(n * 10) / 10));
@@ -87,7 +92,7 @@ function buildAllocationDraftFromRows(
     return { inc: 0, tnc: clampPct(100 - h), hnd: h };
   }
   let incP = clampPct((inc / er) * 100);
-  let hndP = Math.min(
+  const hndP = Math.min(
     MAX_HND_PCT,
     clampPct((hndExpectedProfit / er) * 100),
   );
@@ -106,6 +111,7 @@ export function EditCreatorTargetsDialog({
   resolveHanindoPercent,
   onPersistHanindoPercent,
   onSave,
+  onSaveSuccess,
 }: EditCreatorTargetsDialogProps) {
   const { setPercent, defaultPercent } = useCreatorHanindoPercents();
   const [values, setValues] = useState<Record<string, RowValues>>({});
@@ -214,6 +220,7 @@ export function EditCreatorTargetsDialog({
     }
 
     if (updates.length === 0) {
+      onSaveSuccess?.();
       onOpenChange(false);
       return;
     }
@@ -221,6 +228,7 @@ export function EditCreatorTargetsDialog({
     setSaving(true);
     try {
       await onSave(updates);
+      onSaveSuccess?.();
       onOpenChange(false);
     } finally {
       setSaving(false);
@@ -229,7 +237,13 @@ export function EditCreatorTargetsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[min(92vh,720px)] overflow-y-auto border-white/10 bg-[#070c18]/98 sm:max-w-lg md:max-w-xl">
+      <DialogContent
+        className="max-h-[min(92vh,720px)] overflow-y-auto border-white/10 bg-[#070c18]/98 sm:max-w-lg md:max-w-xl"
+        aria-busy={saving}
+      >
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          {saving ? "Menyimpan perubahan target…" : ""}
+        </p>
         <DialogHeader>
           <DialogTitle>Edit target — {creatorName}</DialogTitle>
           <DialogDescription>
@@ -387,45 +401,39 @@ export function EditCreatorTargetsDialog({
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
                         Table
                       </span>
-                      <select
-                        className={selectClass}
+                      <AppSelect
+                        className={editSelectTriggerClass}
                         value={v.tableSegmentId}
-                        onChange={(e) =>
-                          patchRow(r.targetId, {
-                            tableSegmentId: e.target.value,
-                          })
+                        onChange={(tableSegmentId) =>
+                          patchRow(r.targetId, { tableSegmentId })
                         }
                         disabled={saving}
                         aria-label={`Table untuk ${r.projectName}`}
-                      >
-                        {tableSegments.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </select>
+                        options={tableSegments.map((s) => ({
+                          value: s.id,
+                          label: s.label,
+                        }))}
+                      />
                     </label>
                     <label className="block space-y-1.5">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
                         Base pay
                       </span>
-                      <select
-                        className={selectClass}
-                        value={v.basePay}
-                        onChange={(e) =>
+                      <AppSelect
+                        className={editSelectTriggerClass}
+                        value={String(v.basePay)}
+                        onChange={(bp) =>
                           patchRow(r.targetId, {
-                            basePay: Number(e.target.value),
+                            basePay: Number(bp),
                           })
                         }
                         disabled={saving}
                         aria-label={`Base pay untuk ${r.projectName}`}
-                      >
-                        {basePayOptions.map((bp) => (
-                          <option key={bp} value={bp}>
-                            {formatBasePayLabel(bp)}
-                          </option>
-                        ))}
-                      </select>
+                        options={basePayOptions.map((bp) => ({
+                          value: String(bp),
+                          label: formatBasePayLabel(bp),
+                        }))}
+                      />
                     </label>
                     <label className="block space-y-1.5 sm:col-span-1">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
@@ -483,9 +491,16 @@ export function EditCreatorTargetsDialog({
             type="button"
             onClick={() => void handleSave()}
             disabled={saving || rows.length === 0}
-            className="rounded-xl border border-neon-cyan/40 bg-neon-cyan/15 px-4 py-2 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/25 disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-neon-cyan/40 bg-neon-cyan/15 px-4 py-2 text-sm font-semibold text-neon-cyan transition hover:bg-neon-cyan/25 disabled:opacity-50"
           >
-            {saving ? "Menyimpan…" : "Simpan"}
+            {saving ? (
+              <>
+                <Spinner className="h-4 w-4 text-neon-cyan" />
+                Menyimpan…
+              </>
+            ) : (
+              "Simpan"
+            )}
           </button>
         </DialogFooter>
       </DialogContent>

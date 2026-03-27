@@ -2,12 +2,15 @@
 
 import {
   ChevronRight,
+  CircleHelp,
+  Download,
   Eye,
   Film,
   Link2,
   Pencil,
   Plus,
   SlidersHorizontal,
+  Target,
   Trash2,
 } from "lucide-react";
 import Image from "next/image";
@@ -25,7 +28,7 @@ import {
   mergeHanindoPercentsFromCreators,
 } from "@/lib/dashboard/creator-financial-overrides";
 import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, labelMonth } from "@/lib/utils";
 import {
   splitErForTncHndColumns,
   type AggregatedCreatorRow,
@@ -40,16 +43,26 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  buildPerformanceTableCsv,
+  downloadCsv,
+} from "@/lib/dashboard/export-performance-csv";
 import type { CreatorTargetRowSave } from "@/lib/dashboard/merge-targets";
 import {
   filterPlausibleVideoUrls,
   isPlausibleSubmittedVideoUrl,
 } from "@/lib/dashboard/video-urls";
+import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 const th =
-  "px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-muted";
+  "px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-[0.18em] text-foreground/72";
 
 interface PerformanceTableProps {
   creators: Creator[];
@@ -78,6 +91,19 @@ interface PerformanceTableProps {
     targetId: string,
     urls: string[],
   ) => void | Promise<void>;
+  /** Ubah bulan target (`YYYY-MM`) untuk semua campaign creator di tampilan saat ini. */
+  onUpdateCreatorTargetMonth: (
+    creatorId: string,
+    monthKey: string,
+  ) => void | Promise<void>;
+  /** Baris creator yang baru disimpan — highlight singkat. */
+  highlightedCreatorId?: string | null;
+  /** Panggil setelah simpan dari dialog edit / link video agar baris di-highlight. */
+  onRequestRowHighlight?: (creatorId: string) => void;
+  /** Buka modal Submit Targets (empty state CTA). */
+  onOpenSubmitTargets?: () => void;
+  /** Bulan tabel (untuk nama file CSV). */
+  selectedMonth: string;
 }
 
 export function PerformanceTable({
@@ -96,6 +122,11 @@ export function PerformanceTable({
   onDeleteCreatorTargets,
   onPersistHanindoPercent,
   onReplaceTargetVideoLinks,
+  onUpdateCreatorTargetMonth,
+  highlightedCreatorId = null,
+  onRequestRowHighlight,
+  onOpenSubmitTargets,
+  selectedMonth,
 }: PerformanceTableProps) {
   const { snapshot: hanindoLocalSnapshot } = useCreatorHanindoPercents();
   const hanindoPctByCreator = useMemo(
@@ -126,17 +157,69 @@ export function PerformanceTable({
     setExpanded((p) => ({ ...p, [id]: !p[id] }));
   };
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollFades, setScrollFades] = useState({
+    left: false,
+    right: false,
+  });
+
+  const updateScrollFades = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    const max = scrollWidth - clientWidth;
+    setScrollFades({
+      left: scrollLeft > 2,
+      right: max > 2 && scrollLeft < max - 2,
+    });
+  }, []);
+
+  useEffect(() => {
+    updateScrollFades();
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => updateScrollFades());
+    ro.observe(el);
+    el.addEventListener("scroll", updateScrollFades, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", updateScrollFades);
+    };
+  }, [updateScrollFades, hasRows, creatorRows.length]);
+
+  const onExportCsv = useCallback(() => {
+    const csv = buildPerformanceTableCsv({
+      creators,
+      creatorRows,
+      monthKey: selectedMonth,
+      includeBreakdown: true,
+      breakdownByCreator,
+    });
+    downloadCsv(`tnc-performa-${selectedMonth}.csv`, csv);
+    toast.success("CSV diunduh");
+  }, [creators, creatorRows, selectedMonth, breakdownByCreator]);
+
   if (!hasRows) {
     return (
       <div className="glass-panel neon-border-hover flex min-h-[320px] flex-col items-center justify-center gap-4 rounded-2xl p-10 text-center">
         <div className="rounded-2xl border border-dashed border-neon-purple/30 bg-neon-purple/5 px-6 py-8">
           <p className="text-sm font-medium text-foreground">
-            No targets set for this month yet.
+            Belum ada target untuk bulan ini.
           </p>
           <p className="mt-2 max-w-md text-sm text-muted">
-            Click &quot;Submit Targets&quot; to define video targets and sync them
-            to this dashboard.
+            Tambah target video lewat form bulk — data langsung tersinkron ke
+            workspace bersama.
           </p>
+          {onOpenSubmitTargets ? (
+            <button
+              type="button"
+              onClick={onOpenSubmitTargets}
+              className="btn-press mt-5 inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-night bg-gradient-to-r from-neon-cyan via-cyan-300 to-neon-purple shadow-[0_0_24px_rgba(50,230,255,0.3)]"
+            >
+              <Target className="h-4 w-4" />
+              Submit Targets
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -144,23 +227,44 @@ export function PerformanceTable({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-white/[0.06] bg-gradient-to-br from-white/[0.04] to-transparent shadow-[0_0_0_1px_rgba(50,230,255,0.06)]">
-      <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] px-4 py-3">
         <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-muted">
           <SlidersHorizontal className="h-4 w-4 text-neon-cyan" />
           Creator Performance / Targets
         </div>
-        <div className="h-px flex-1 mx-6 bg-gradient-to-r from-transparent via-neon-cyan/25 to-transparent" />
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onExportCsv}
+            className="btn-press inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted transition hover:border-neon-cyan/35 hover:text-neon-cyan"
+          >
+            <Download className="h-3.5 w-3.5" />
+            CSV
+          </button>
+          <TableActionLegend />
+        </div>
+        <div className="h-px min-w-[40px] flex-1 mx-2 bg-gradient-to-r from-transparent via-neon-cyan/25 to-transparent max-sm:hidden" />
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="min-w-[1220px] w-full border-collapse text-sm">
+      <div
+        ref={scrollRef}
+        className={cn(
+          "perf-table-scroll-wrap overflow-x-auto",
+          scrollFades.left && "perf-scroll-fade-left",
+          scrollFades.right && "perf-scroll-fade-right",
+        )}
+      >
+        <table className="min-w-[1440px] w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-              <th className={cn(th, "sticky left-0 z-20 min-w-[220px] bg-[#070c18]/95 backdrop-blur")}>
+              <th className={cn(th, "sticky left-0 z-20 min-w-[240px] bg-[#070c18]/95 backdrop-blur")}>
                 Creator
               </th>
               <th className={th}>Target</th>
               <th className={th}>Submitted</th>
+              <th className={cn(th, "min-w-[100px]")} title="Submitted ÷ target">
+                Progress
+              </th>
               <th className={th}>Expected Revenue</th>
               <th className={th}>Actual Revenue</th>
               <th className={th}>Incentives</th>
@@ -183,6 +287,12 @@ export function PerformanceTable({
                 </span>
                 <span className="block tracking-[0.14em]">Exp. profit</span>
               </th>
+              <th
+                className={cn(th, "min-w-[118px] whitespace-nowrap")}
+                title="Bulan dimana target ini dihitung; ubah untuk memindah baris ke bulan lain"
+              >
+                Target month
+              </th>
             </tr>
           </thead>
 
@@ -193,6 +303,11 @@ export function PerformanceTable({
             const hasAvatar = avatarSrc.length > 0;
             const open = expanded[row.creatorId];
             const breakdown = breakdownByCreator(row.creatorId);
+            const monthForPicker =
+              row.targetMonthKey ??
+              breakdown[0]?.month ??
+              selectedMonth;
+            const mixedMonths = row.targetMonthKey === null;
 
             return (
               <tbody
@@ -204,11 +319,13 @@ export function PerformanceTable({
                     "relative transition-colors duration-300",
                     "hover:bg-white/[0.04]",
                     "hover:shadow-[inset_0_0_0_1px_rgba(50,230,255,0.14),0_0_24px_rgba(50,230,255,0.06)]",
+                    "focus-within:outline-none focus-within:ring-2 focus-within:ring-neon-cyan/35 focus-within:ring-inset",
+                    highlightedCreatorId === row.creatorId && "perf-row-saved-flash",
                   )}
                 >
                   <td
                     className={cn(
-                      "relative sticky left-0 z-10 min-w-[220px] bg-[#070c18]/95 px-3 py-3 backdrop-blur",
+                      "relative sticky left-0 z-10 min-w-[240px] bg-[#070c18]/95 px-3 py-3 backdrop-blur",
                       "border-r border-white/[0.04]",
                     )}
                   >
@@ -257,21 +374,21 @@ export function PerformanceTable({
                         <div className="mt-1">
                           <CreatorTypeChip type={c.creatorType} />
                         </div>
-                        <div className="mt-2 grid w-full min-w-0 grid-cols-2 gap-1">
+                        <div className="mt-2 grid w-full min-w-0 grid-cols-2 gap-x-1 gap-y-1">
                           <RowMiniAction
-                            icon={<Eye className="h-3 w-3 shrink-0" />}
+                            icon={<Eye className="h-2.5 w-2.5 shrink-0" />}
                             text="Details"
                             onClick={() => onCreatorClick(row.creatorId)}
                           />
                           <RowMiniAction
-                            icon={<Film className="h-3 w-3 shrink-0" />}
+                            icon={<Film className="h-2.5 w-2.5 shrink-0" />}
                             text="Videos"
                             onClick={() =>
                               onOpenSubmitVideosForCreator(row.creatorId)
                             }
                           />
                           <RowMiniAction
-                            icon={<Pencil className="h-3 w-3 shrink-0" />}
+                            icon={<Pencil className="h-2.5 w-2.5 shrink-0" />}
                             text="Edit"
                             onClick={() => {
                               const b = breakdownByCreator(row.creatorId);
@@ -291,7 +408,7 @@ export function PerformanceTable({
                             }}
                           />
                           <RowMiniAction
-                            icon={<Trash2 className="h-3 w-3 shrink-0" />}
+                            icon={<Trash2 className="h-2.5 w-2.5 shrink-0" />}
                             text="Delete"
                             variant="danger"
                             onClick={() =>
@@ -318,6 +435,9 @@ export function PerformanceTable({
                               urls,
                             )
                           }
+                          onSaveComplete={() =>
+                            onRequestRowHighlight?.(row.creatorId)
+                          }
                         />
                       ) : breakdown.length > 1 ? (
                         <button
@@ -331,6 +451,12 @@ export function PerformanceTable({
                         </button>
                       ) : null}
                     </div>
+                  </td>
+                  <td className="px-3 py-3 align-middle">
+                    <VideoProgressCell
+                      submitted={row.submittedVideos}
+                      target={row.targetVideos}
+                    />
                   </td>
                   <td className="px-3 py-3 text-xs text-foreground/90">
                     {formatCurrency(row.expectedRevenue)}
@@ -350,10 +476,49 @@ export function PerformanceTable({
                   <td className="px-3 py-3 text-xs text-neon-purple/90 tabular-nums">
                     {formatCurrency(row.hndExpectedProfit)}
                   </td>
+                  <td className="px-3 py-3 align-middle">
+                    <div className="flex min-w-[7.5rem] flex-col gap-1">
+                      <input
+                        type="month"
+                        value={monthForPicker}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (
+                            row.targetMonthKey !== null &&
+                            v === row.targetMonthKey
+                          )
+                            return;
+                          void onUpdateCreatorTargetMonth(row.creatorId, v);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        title={
+                          mixedMonths
+                            ? "Beberapa campaign beda bulan — pilih untuk menyamakan semua ke bulan ini"
+                            : "Ubah bulan & tahun target"
+                        }
+                        className={cn(
+                          "w-full max-w-[11rem] cursor-pointer rounded-lg border border-white/15 bg-black/35 px-2 py-1.5 text-[11px] font-medium text-foreground tabular-nums",
+                          "outline-none transition hover:border-neon-cyan/40 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/30",
+                          mixedMonths && "border-amber-400/35",
+                        )}
+                      />
+                      {mixedMonths ? (
+                        <span className="text-[10px] leading-4 text-amber-200/80">
+                          Campuran:{" "}
+                          {[
+                            ...new Set(breakdown.map((b) => b.month)),
+                          ]
+                            .sort()
+                            .map((k) => labelMonth(k))
+                            .join(" · ")}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
                 </tr>
 
                 <tr className="border-b-0 bg-white/[0.015]">
-                  <td colSpan={9} className="p-0">
+                  <td colSpan={11} className="p-0">
                     <div
                       className={cn(
                         "perf-expand-inner grid transition-[grid-template-rows] duration-300 ease-out",
@@ -491,6 +656,9 @@ export function PerformanceTable({
                                               urls,
                                             )
                                           }
+                                          onSaveComplete={() =>
+                                            onRequestRowHighlight?.(b.creatorId)
+                                          }
                                         />
                                       </div>
                                     </td>
@@ -524,7 +692,7 @@ export function PerformanceTable({
           {totalRow ? (
             <tfoot>
               <tr className="bg-gradient-to-r from-neon-purple/10 via-transparent to-neon-cyan/10">
-                <td className="sticky left-0 z-10 bg-[#0a1020]/95 px-3 py-4 text-sm font-bold text-foreground backdrop-blur">
+                <td className="sticky left-0 z-10 min-w-[240px] bg-[#0a1020]/95 px-3 py-4 text-sm font-bold text-foreground backdrop-blur">
                   Total
                 </td>
                 <td className="px-3 py-4 text-sm font-bold font-mono">
@@ -532,6 +700,12 @@ export function PerformanceTable({
                 </td>
                 <td className="px-3 py-4 text-sm font-bold font-mono">
                   {totalRow.submittedVideos}
+                </td>
+                <td className="px-3 py-4 align-middle">
+                  <VideoProgressCell
+                    submitted={totalRow.submittedVideos}
+                    target={totalRow.targetVideos}
+                  />
                 </td>
                 <td className="px-3 py-4 text-sm font-bold">
                   {formatCurrency(totalRow.expectedRevenue)}
@@ -551,6 +725,7 @@ export function PerformanceTable({
                 <td className="px-3 py-4 text-sm font-bold tabular-nums text-neon-purple">
                   {formatCurrency(totalRow.hndExpectedProfit)}
                 </td>
+                <td className="px-3 py-4 text-xs text-muted">—</td>
               </tr>
             </tfoot>
           ) : null}
@@ -569,8 +744,128 @@ export function PerformanceTable({
         resolveHanindoPercent={resolveHanindoPercent}
         onPersistHanindoPercent={onPersistHanindoPercent}
         onSave={onUpdateTargetRows}
+        onSaveSuccess={() => {
+          const id = editCtx?.creatorId;
+          if (id) onRequestRowHighlight?.(id);
+        }}
       />
     </div>
+  );
+}
+
+function VideoProgressCell({
+  submitted,
+  target,
+}: {
+  submitted: number;
+  target: number;
+}) {
+  const pct =
+    target <= 0
+      ? submitted > 0
+        ? 100
+        : 0
+      : Math.min(100, (submitted / target) * 100);
+  const exceeded = target > 0 && submitted > target;
+  const label =
+    target <= 0
+      ? submitted > 0
+        ? `${submitted} video dikirim (tanpa kuota target di baris agregat)`
+        : "Belum ada kuota target"
+      : `${submitted} / ${target} video — ${pct.toFixed(0)}%${exceeded ? " (melebihi target)" : ""}`;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="w-full min-w-[88px] max-w-[130px] cursor-default py-0.5">
+          <div className="h-2 overflow-hidden rounded-full bg-white/10">
+            <div
+              className={cn(
+                "h-full rounded-full transition-[width] duration-300 ease-out",
+                exceeded
+                  ? "bg-gradient-to-r from-amber-400/95 to-neon-purple/90"
+                  : "bg-gradient-to-r from-neon-cyan to-cyan-300",
+              )}
+              style={{ width: `${exceeded ? 100 : pct}%` }}
+            />
+          </div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function TableActionLegend() {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted transition hover:border-neon-cyan/35 hover:text-neon-cyan focus:outline-none focus:ring-2 focus:ring-neon-cyan/30"
+        >
+          <CircleHelp className="h-3.5 w-3.5 text-neon-cyan/80" />
+          Legenda
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="w-[min(100vw-2rem,18rem)] border-white/[0.08] bg-[#0a1020]/98 p-3 text-xs shadow-2xl"
+        align="end"
+        sideOffset={8}
+      >
+        <p className="mb-2 font-semibold text-foreground">Ikon aksi baris</p>
+        <ul className="space-y-2 text-muted">
+          <li className="flex gap-2">
+            <Eye className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-cyan/80" />
+            <span>
+              <strong className="text-foreground/90">Details</strong> — buka
+              drawer ringkasan creator.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <Film className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-cyan/80" />
+            <span>
+              <strong className="text-foreground/90">Videos</strong> — bulk
+              submit URL untuk creator ini.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <Pencil className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-cyan/80" />
+            <span>
+              <strong className="text-foreground/90">Edit</strong> — ubah
+              target, meja, insentif per campaign.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-cyan/80" />
+            <span>
+              <strong className="text-foreground/90">Link</strong> — daftar URL
+              video per target / submitted.
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <Trash2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-300/90" />
+            <span>
+              <strong className="text-foreground/90">Delete</strong> — hapus
+              semua target creator (bulan &amp; filter saat ini).
+            </span>
+          </li>
+        </ul>
+        <p className="mt-3 border-t border-white/[0.06] pt-2 text-[10px] leading-relaxed text-muted">
+          Pintasan:{" "}
+          <kbd className="rounded border border-white/15 bg-white/5 px-1 py-px font-mono text-[10px] text-foreground/85">
+            Ctrl
+          </kbd>
+          +
+          <kbd className="rounded border border-white/15 bg-white/5 px-1 py-px font-mono text-[10px] text-foreground/85">
+            K
+          </kbd>{" "}
+          — palet perintah (overview, data settings, submit).
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -578,10 +873,12 @@ function SubmittedVideoLinksPopover({
   urls,
   submittedVideos,
   onSave,
+  onSaveComplete,
 }: {
   urls: string[];
   submittedVideos: number;
   onSave: (urls: string[]) => void | Promise<void>;
+  onSaveComplete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
@@ -636,7 +933,12 @@ function SubmittedVideoLinksPopover({
     setSaving(true);
     try {
       await onSave(cleaned);
+      onSaveComplete?.();
       setOpen(false);
+    } catch (e) {
+      toast.error("Gagal menyimpan link", {
+        description: formatSupabaseClientError(e),
+      });
     } finally {
       setSaving(false);
     }
@@ -812,19 +1114,20 @@ function RowMiniAction({
   return (
     <button
       type="button"
+      title={text}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
       }}
       className={cn(
-        "pointer-events-auto inline-flex w-full min-w-0 items-center justify-center gap-1 rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-foreground/90 shadow-sm backdrop-blur transition",
+        "pointer-events-auto inline-flex w-full min-w-0 max-w-full items-center justify-center gap-0.5 rounded-md border border-white/10 bg-black/40 px-0.5 py-1 text-[8px] font-semibold uppercase leading-none tracking-tight text-foreground/90 shadow-sm backdrop-blur transition sm:text-[9px]",
         variant === "danger"
           ? "hover:border-red-400/45 hover:text-red-300"
           : "hover:border-neon-cyan/40 hover:text-neon-cyan",
       )}
     >
       {icon}
-      <span className="whitespace-nowrap">{text}</span>
+      <span className="min-w-0 max-w-[100%] truncate text-center">{text}</span>
     </button>
   );
 }

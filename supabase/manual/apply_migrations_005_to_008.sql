@@ -1,8 +1,8 @@
 -- =============================================================================
--- TNC Ternak — migrasi INCREMENTAL: 005 → 008
+-- TNC Ternak — migrasi INCREMENTAL: 005 → 009 (nama file tetap *_008 untuk kompatibilitas)
 -- =============================================================================
 -- Pakai ini jika database sudah pernah menjalankan 001 + 002 + 003 + 004
--- (atau apply_all versi lama tanpa 005–008). Idempotent: aman dijalankan ulang.
+-- (atau apply_all versi lama tanpa 005–009). Idempotent: aman dijalankan ulang.
 -- =============================================================================
 
 -- ----- 005_creator_targets_table_segment.sql -----
@@ -62,5 +62,30 @@ alter table public.creator_targets
 
 comment on column public.creator_targets.submitted_video_urls is
   'Array URL TikTok per video, disinkron dengan hitungan submitted dan actual revenue.';
+
+-- ----- 009_workspace_activity_log.sql -----
+create table if not exists public.workspace_activity_log (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  actor_email text,
+  action text not null,
+  entity_type text not null,
+  summary text not null,
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create index if not exists idx_workspace_activity_log_created_at
+  on public.workspace_activity_log (created_at desc);
+
+alter table public.workspace_activity_log enable row level security;
+
+drop policy if exists "workspace_activity_log_select_auth" on public.workspace_activity_log;
+drop policy if exists "workspace_activity_log_insert_auth" on public.workspace_activity_log;
+
+create policy "workspace_activity_log_select_auth"
+  on public.workspace_activity_log for select to authenticated using (true);
+
+create policy "workspace_activity_log_insert_auth"
+  on public.workspace_activity_log for insert to authenticated with check (true);
 
 notify pgrst, 'reload schema';

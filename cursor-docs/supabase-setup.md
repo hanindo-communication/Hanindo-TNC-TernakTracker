@@ -19,9 +19,9 @@ Aplikasi memakai **workspace bersama** (`user_id` sentinel). Tanpa migrasi, API 
 
 1. Buka **SQL Editor** di project: [SQL Editor](https://supabase.com/dashboard/project/dnphxqaqlyniobnlicfx/sql).
 
-**Opsi A — database masih kosong (disarankan):** salin **seluruh** isi `supabase/manual/apply_all_migrations.sql`, jalankan sekali (Run). File itu berisi **001 → 008**: schema dasar, RLS workspace bersama, `brands.table_segment`, RPC `request_postgrest_schema_reload`, **`creator_targets.table_segment`** + unique key, **`creators.hanindo_sharing_percent`**, **`creator_targets.submitted_video_urls`**, lalu **`NOTIFY pgrst`** di akhir.
+**Opsi A — database masih kosong (disarankan):** salin **seluruh** isi `supabase/manual/apply_all_migrations.sql`, jalankan sekali (Run). File itu berisi **001 → 009**: schema dasar, RLS workspace bersama, `brands.table_segment`, RPC `request_postgrest_schema_reload`, **`creator_targets.table_segment`** + unique key, **`creators.hanindo_sharing_percent`**, **`creator_targets.submitted_video_urls`**, tabel **`workspace_activity_log`** (Riwayat perubahan), lalu **`NOTIFY pgrst`** di akhir.
 
-**Opsi A2 — DB sudah pernah jalan `apply_all_migrations.sql` versi lama (hanya sampai 004):** jangan jalankan utuh file itu lagi (berisiko mengulang langkah destruktif di 002). Gunakan **`supabase/manual/apply_migrations_005_to_008.sql`** sekali di SQL Editor (idempotent), lalu refresh app.
+**Opsi A2 — DB sudah pernah jalan `apply_all_migrations.sql` versi lama (hanya sampai 004 atau tanpa 009):** jangan jalankan utuh file itu lagi (berisiko mengulang langkah destruktif di 002). Gunakan **`supabase/manual/apply_migrations_005_to_008.sql`** sekali di SQL Editor (idempotent; isinya **005–009** + NOTIFY di akhir), lalu refresh app.
 
 **Opsi B — jalankan per file:**
 
@@ -33,10 +33,11 @@ Aplikasi memakai **workspace bersama** (`user_id` sentinel). Tanpa migrasi, API 
 7. `supabase/migrations/006_creator_targets_unique_table_segment.sql` (Run) — unik per `(…, month, table_segment)`.
 8. `supabase/migrations/007_creators_hanindo_sharing_percent.sql` (Run) — kolom **[HND]** per creator.
 9. `supabase/migrations/008_submitted_video_urls.sql` (Run) — JSON array URL video per baris target; di akhir file ada `NOTIFY pgrst`.
+10. `supabase/migrations/009_workspace_activity_log.sql` (Run) — log riwayat perubahan workspace; setelah itu `NOTIFY pgrst` jika file tidak menyertakannya (atau pakai `supabase/manual/apply_migration_009_workspace_activity_log.sql` yang sudah NOTIFY di akhir).
 
 **Lokal via Postgres URI:** `npm run db:apply-video-urls` menambah kolom **008** saja (butuh `DATABASE_URL` di `.env.local`).
 
-Tanpa **002**, insert dari app memakai UUID `00000000-0000-0000-0000-000000000001` akan **gagal foreign key** ke `auth.users`. Tanpa **001**, tabel seperti `campaign_objectives` tidak ada. Tanpa **`table_segment` pada `brands`**, **Simpan & sinkron** di Data settings akan gagal saat upsert brand. Tanpa **005–006**, kolom **`creator_targets.table_segment`** hilang dan upsert target bisa error. Tanpa **008**, kolom **`submitted_video_urls`** hilang dan simpan link video / upsert penuh bisa gagal.
+Tanpa **002**, insert dari app memakai UUID `00000000-0000-0000-0000-000000000001` akan **gagal foreign key** ke `auth.users`. Tanpa **001**, tabel seperti `campaign_objectives` tidak ada. Tanpa **`table_segment` pada `brands`**, **Simpan & sinkron** di Data settings akan gagal saat upsert brand. Tanpa **005–006**, kolom **`creator_targets.table_segment`** hilang dan upsert target bisa error. Tanpa **008**, kolom **`submitted_video_urls`** hilang dan simpan link video / upsert penuh bisa gagal. Tanpa **009**, modal **Riwayat perubahan** gagal memuat (PGRST205 / tabel tidak di cache).
 
 ### Error PGRST205 padahal tabel sudah ada di Table Editor
 

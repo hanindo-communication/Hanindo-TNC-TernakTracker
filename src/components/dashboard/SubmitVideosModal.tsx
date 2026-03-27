@@ -35,7 +35,9 @@ import {
   type TikTokAccount,
   type VideoSubmitFormRow,
 } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/spinner";
+import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
+import { cn, labelMonth } from "@/lib/utils";
 import type { TableSegmentOption } from "@/components/dashboard/QuickFilterChips";
 
 function resolveTargetId(
@@ -152,7 +154,15 @@ export function SubmitVideosModal({
     setSubmitting(true);
     try {
       await onSubmitVideos(deltas);
+      const urlTotal = deltas.reduce((s, d) => s + d.urls.length, 0);
+      toast.success("Video submissions disimpan", {
+        description: `${deltas.length} target · ${urlTotal} URL — ${labelMonth(selectedMonth)}.`,
+      });
       onOpenChange(false);
+    } catch (e) {
+      toast.error("Gagal menyimpan video", {
+        description: formatSupabaseClientError(e),
+      });
     } finally {
       setSubmitting(false);
     }
@@ -160,7 +170,13 @@ export function SubmitVideosModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[min(92vh,900px)] max-w-6xl overflow-y-auto border-white/10 bg-[#070c18]/98">
+      <DialogContent
+        className="max-h-[min(92vh,900px)] max-w-6xl overflow-y-auto border-white/10 bg-[#070c18]/98"
+        aria-busy={submitting}
+      >
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          {submitting ? "Mengirim URL video ke workspace…" : ""}
+        </p>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5 text-neon-cyan" />
@@ -239,16 +255,21 @@ export function SubmitVideosModal({
             onClick={() => void handleSubmit()}
             disabled={submitting}
             className={cn(
-              "rounded-xl px-5 py-2 text-sm font-semibold text-night",
+              "inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2 text-sm font-semibold text-night",
               "bg-gradient-to-r from-neon-cyan via-cyan-300 to-neon-purple",
               "shadow-[0_0_24px_rgba(50,230,255,0.3)] transition hover:brightness-110 disabled:opacity-50",
             )}
           >
-            {submitting
-              ? "Submitting…"
-              : bulkMode
-                ? "Submit Videos (Bulk)"
-                : "Submit Videos"}
+            {submitting ? (
+              <>
+                <Spinner className="h-4 w-4 text-night" />
+                Menyimpan…
+              </>
+            ) : bulkMode ? (
+              "Submit Videos (Bulk)"
+            ) : (
+              "Submit Videos"
+            )}
           </button>
         </DialogFooter>
       </DialogContent>

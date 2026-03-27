@@ -636,4 +636,58 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
   if (te) throw te;
 }
 
+export interface WorkspaceActivityRow {
+  id: string;
+  created_at: string;
+  actor_email: string | null;
+  action: string;
+  entity_type: string;
+  summary: string;
+  metadata: Record<string, unknown> | null;
+}
+
+/** Catat aksi ke log workspace (best-effort; gagal tidak mengganggu alur utama). */
+export async function logWorkspaceActivity(
+  supabase: SupabaseClient,
+  row: {
+    actorEmail: string | null | undefined;
+    action: string;
+    entityType: string;
+    summary: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  try {
+    const { error } = await supabase.from("workspace_activity_log").insert({
+      actor_email: row.actorEmail?.trim() || null,
+      action: row.action,
+      entity_type: row.entityType,
+      summary: row.summary,
+      metadata: row.metadata ?? {},
+    });
+    if (error && process.env.NODE_ENV === "development") {
+      console.warn("[logWorkspaceActivity]", error.message);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function fetchWorkspaceActivityLog(
+  supabase: SupabaseClient,
+  limit = 100,
+): Promise<WorkspaceActivityRow[]> {
+  return withPostgrestSchemaRetry(supabase, async () => {
+    const { data, error } = await supabase
+      .from("workspace_activity_log")
+      .select(
+        "id, created_at, actor_email, action, entity_type, summary, metadata",
+      )
+      .order("created_at", { ascending: false })
+      .limit(Math.min(500, Math.max(1, limit)));
+    if (error) throw error;
+    return (data ?? []) as WorkspaceActivityRow[];
+  });
+}
+
 export { defaultBasePayByType };

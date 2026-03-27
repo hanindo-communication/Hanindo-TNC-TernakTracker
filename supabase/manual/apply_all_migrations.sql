@@ -3,7 +3,7 @@
 -- =============================================================================
 -- Pakai file ini jika project Supabase MASIH KOSONG (belum pernah jalan 001).
 -- Jika 001–004 sudah pernah dijalankan, jangan jalankan utuh — gunakan:
---   supabase/manual/apply_migrations_005_to_008.sql (aman, idempotent).
+--   supabase/manual/apply_migrations_005_to_008.sql (005–009 + NOTIFY; aman, idempotent).
 -- Setelah sukses, akhir file ini memanggil NOTIFY pgrst (reload schema).
 -- =============================================================================
 
@@ -289,6 +289,28 @@ alter table public.creator_targets
 
 comment on column public.creator_targets.submitted_video_urls is
   'Array URL TikTok per video, disinkron dengan hitungan submitted dan actual revenue.';
+
+-- ----- 009_workspace_activity_log.sql -----
+create table if not exists public.workspace_activity_log (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  actor_email text,
+  action text not null,
+  entity_type text not null,
+  summary text not null,
+  metadata jsonb not null default '{}'::jsonb
+);
+
+create index if not exists idx_workspace_activity_log_created_at
+  on public.workspace_activity_log (created_at desc);
+
+alter table public.workspace_activity_log enable row level security;
+
+create policy "workspace_activity_log_select_auth"
+  on public.workspace_activity_log for select to authenticated using (true);
+
+create policy "workspace_activity_log_insert_auth"
+  on public.workspace_activity_log for insert to authenticated with check (true);
 
 -- Refresh cache API Supabase (PostgREST)
 notify pgrst, 'reload schema';

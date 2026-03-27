@@ -13,6 +13,7 @@ import { CreatorDetailDrawer } from "@/components/dashboard/CreatorDetailDrawer"
 import { DashboardAtmosphere } from "@/components/dashboard/DashboardAtmosphere";
 import { DashboardCommandMenu } from "@/components/dashboard/DashboardCommandMenu";
 import { DashboardHeader } from "@/components/dashboard/DashboardHeader";
+import { DashboardKpiStrip } from "@/components/dashboard/DashboardKpiStrip";
 import { DashboardSkeleton } from "@/components/dashboard/DashboardSkeleton";
 import { DataSettingsModal } from "@/components/dashboard/DataSettingsModal";
 import { OverviewModal } from "@/components/dashboard/OverviewModal";
@@ -20,6 +21,7 @@ import { PerformanceTable } from "@/components/dashboard/PerformanceTable";
 import { QuickFilterChips } from "@/components/dashboard/QuickFilterChips";
 import { SubmitTargetsModal } from "@/components/dashboard/SubmitTargetsModal";
 import { SubmitVideosModal } from "@/components/dashboard/SubmitVideosModal";
+import { WorkspaceActivityLogModal } from "@/components/dashboard/WorkspaceActivityLogModal";
 import {
   Dialog,
   DialogContent,
@@ -32,9 +34,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCreatorDashboard } from "@/hooks/useCreatorDashboard";
 import { useFormSettings } from "@/hooks/useFormSettings";
 import {
+  logWorkspaceActivity,
   persistCreatorHanindoSharingPercent,
   syncStoredFormEntitiesToSupabase,
 } from "@/lib/dashboard/supabase-data";
+import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
 import {
   mergeBrands,
   mergeCreators,
@@ -155,16 +159,21 @@ function CreatorDashboardInner({
     hasRows,
     handleSubmitTargets,
     handleUpdateTargetRows,
+    handleUpdateCreatorTargetMonth,
     handleDeleteCreatorTargets,
     handleSubmitVideoUrls,
     handleReplaceTargetVideoLinks,
     targets,
     campaignObjectives,
     loading,
-    overviewStats,
+    overviewTableSparkline,
+    prevMonthKey,
+    totalRowPreviousMonth,
+    creatorRowsPreviousMonth,
+    getCreatorExpectedRevenueSeries,
     seedIfEmpty,
     reload,
-  } = useCreatorDashboard();
+  } = useCreatorDashboard({ actorEmail: userEmail ?? null });
 
   const { stored: formSettingsStored, persist: persistFormSettings } =
     useFormSettings();
@@ -196,6 +205,13 @@ function CreatorDashboardInner({
           percent,
         );
         await reload();
+        void logWorkspaceActivity(supabaseForm, {
+          actorEmail: userEmail,
+          action: "update",
+          entityType: "creator",
+          summary: `Mengubah porsi Hanindo (% [HND]) — creator ${creatorId.slice(0, 8)}… = ${percent}%`,
+          metadata: { creatorId, percent },
+        });
       } catch (e) {
         toast.error("Gagal menyimpan % Hanindo", {
           description:
@@ -204,8 +220,39 @@ function CreatorDashboardInner({
         throw e;
       }
     },
-    [supabaseForm, reload],
+    [supabaseForm, reload, userEmail],
   );
+
+  const handleSaveProject = useCallback(async () => {
+    setSaveProjectBusy(true);
+    try {
+      await syncStoredFormEntitiesToSupabase(supabaseForm, formSettingsStored);
+      await logWorkspaceActivity(supabaseForm, {
+        actorEmail: userEmail,
+        action: "sync",
+        entityType: "workspace_entities",
+        summary:
+          "Simpan proyek — sinkron draft Data settings (brand, project, creator, TikTok) ke Supabase",
+        metadata: {
+          brands: formSettingsStored.brands.length,
+          projects: formSettingsStored.projects.length,
+          creators: formSettingsStored.creators.length,
+          tiktokAccounts: formSettingsStored.tiktokAccounts.length,
+        },
+      });
+      await reload();
+      toast.success("Proyek tersimpan", {
+        description:
+          "Draft dari Data settings sudah ke Supabase. Target, link video, dan edit tabel tersimpan otomatis saat Anda mengubahnya.",
+      });
+    } catch (e) {
+      toast.error("Gagal menyimpan proyek", {
+        description: formatSupabaseClientError(e),
+      });
+    } finally {
+      setSaveProjectBusy(false);
+    }
+  }, [supabaseForm, formSettingsStored, reload, userEmail]);
 
   useEffect(() => {
     const ok = TABLE_CHIP_OPTIONS.some((s) => s.id === quickFilter);
@@ -229,6 +276,11 @@ function CreatorDashboardInner({
   >(() => new Set());
   const [videosModalOpen, setVideosModalOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
+  const [saveProjectBusy, setSaveProjectBusy] = useState(false);
+  const [highlightedCreatorId, setHighlightedCreatorId] = useState<
+    string | null
+  >(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{
     creatorId: string;
     creatorName: string;
@@ -245,6 +297,16 @@ function CreatorDashboardInner({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    if (!highlightedCreatorId) return;
+    const id = window.setTimeout(() => setHighlightedCreatorId(null), 2200);
+    return () => clearTimeout(id);
+  }, [highlightedCreatorId]);
+
+  const requestRowHighlight = useCallback((creatorId: string) => {
+    setHighlightedCreatorId(creatorId);
   }, []);
 
   const toggleVideoSubmitTarget = useCallback(
@@ -311,10 +373,14 @@ function CreatorDashboardInner({
 
   const submitVideosAndClear = useCallback(
     async (deltas: { targetId: string; urls: string[] }[]) => {
+      const firstCreatorId = deltas
+        .map((d) => targets.find((t) => t.id === d.targetId)?.creatorId)
+        .find((id): id is string => Boolean(id));
       await handleSubmitVideoUrls(deltas);
       setVideoSubmitTargetIds(new Set());
+      if (firstCreatorId) requestRowHighlight(firstCreatorId);
     },
-    [handleSubmitVideoUrls],
+    [handleSubmitVideoUrls, targets, requestRowHighlight],
   );
 
   const selectedVideoTargetIdsList = useMemo(
@@ -331,6 +397,22 @@ function CreatorDashboardInner({
     () => creatorRows.find((r) => r.creatorId === drawerCreatorId) ?? null,
     [creatorRows, drawerCreatorId],
   );
+
+  const drawerAggregatePreviousMonth = useMemo(() => {
+    if (!drawerCreatorId) return null;
+    return (
+      creatorRowsPreviousMonth.find((r) => r.creatorId === drawerCreatorId) ??
+      null
+    );
+  }, [creatorRowsPreviousMonth, drawerCreatorId]);
+
+  const drawerRevenueSeries = useMemo(() => {
+    if (!drawerCreatorId) return [];
+    return getCreatorExpectedRevenueSeries(drawerCreatorId).map((p) => ({
+      monthKey: p.monthKey,
+      value: p.expectedRevenue,
+    }));
+  }, [drawerCreatorId, getCreatorExpectedRevenueSeries]);
 
   const openCreator = (creatorId: string) => {
     setDrawerCreatorId(creatorId);
@@ -366,6 +448,9 @@ function CreatorDashboardInner({
                   onSubmitVideos={() => setVideosModalOpen(true)}
                   onOverview={() => setOverviewOpen(true)}
                   onDataSettings={() => setDataSettingsOpen(true)}
+                  onSaveProject={() => void handleSaveProject()}
+                  saveProjectPending={saveProjectBusy}
+                  onOpenActivityLog={() => setActivityLogOpen(true)}
                   userEmail={userEmail}
                   onSignOut={onSignOut}
                 />
@@ -421,6 +506,16 @@ function CreatorDashboardInner({
                 </p>
               </div>
 
+              {totalRow && hasRows ? (
+                <div className="dash-reveal-item dash-reveal-delay-2">
+                  <DashboardKpiStrip
+                    totalRow={totalRow}
+                    totalRowPreviousMonth={totalRowPreviousMonth}
+                    previousMonthKey={prevMonthKey}
+                  />
+                </div>
+              ) : null}
+
               <div className="dash-reveal-item dash-reveal-delay-3">
                 <PerformanceTable
                   creators={mergedCreators}
@@ -428,6 +523,7 @@ function CreatorDashboardInner({
                   breakdownByCreator={breakdownByCreator}
                   totalRow={totalRow}
                   hasRows={hasRows}
+                  selectedMonth={selectedMonth}
                   onCreatorClick={openCreator}
                   onUpdateTargetRows={handleUpdateTargetRows}
                   tableSegments={TABLE_CHIP_OPTIONS}
@@ -440,6 +536,10 @@ function CreatorDashboardInner({
                   onDeleteCreatorTargets={requestDeleteCreatorTargets}
                   onPersistHanindoPercent={persistHanindoPercent}
                   onReplaceTargetVideoLinks={handleReplaceTargetVideoLinks}
+                  onUpdateCreatorTargetMonth={handleUpdateCreatorTargetMonth}
+                  highlightedCreatorId={highlightedCreatorId}
+                  onRequestRowHighlight={requestRowHighlight}
+                  onOpenSubmitTargets={() => setTargetsModalOpen(true)}
                 />
               </div>
             </>
@@ -449,7 +549,10 @@ function CreatorDashboardInner({
             open={overviewOpen}
             onOpenChange={setOverviewOpen}
             monthKey={selectedMonth}
-            stats={overviewStats}
+            tableTotal={totalRow}
+            tableTotalPreviousMonth={totalRowPreviousMonth}
+            previousMonthKey={prevMonthKey}
+            sparkline={overviewTableSparkline}
           />
 
           <SubmitTargetsModal
@@ -529,10 +632,28 @@ function CreatorDashboardInner({
             workspaceProjects={projects}
             workspaceCreators={creators}
             workspaceTiktok={tiktokAccounts}
-            onSyncToSupabase={(next) =>
-              syncStoredFormEntitiesToSupabase(supabaseForm, next)
-            }
+            onSyncToSupabase={async (next) => {
+              await syncStoredFormEntitiesToSupabase(supabaseForm, next);
+              void logWorkspaceActivity(supabaseForm, {
+                actorEmail: userEmail,
+                action: "sync",
+                entityType: "workspace_entities",
+                summary:
+                  "Sinkron Data settings ke Supabase (dari modal pengaturan)",
+                metadata: {
+                  brands: next.brands.length,
+                  projects: next.projects.length,
+                  creators: next.creators.length,
+                  tiktokAccounts: next.tiktokAccounts.length,
+                },
+              });
+            }}
             onReload={reload}
+          />
+
+          <WorkspaceActivityLogModal
+            open={activityLogOpen}
+            onOpenChange={setActivityLogOpen}
           />
 
           {drawerCreator && drawerAggregate ? (
@@ -544,6 +665,9 @@ function CreatorDashboardInner({
               }}
               creator={drawerCreator}
               aggregate={drawerAggregate}
+              aggregatePreviousMonth={drawerAggregatePreviousMonth}
+              previousMonthKey={prevMonthKey}
+              revenueSeries={drawerRevenueSeries}
             />
           ) : null}
 

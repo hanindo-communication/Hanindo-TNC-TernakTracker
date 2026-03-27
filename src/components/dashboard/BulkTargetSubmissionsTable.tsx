@@ -17,19 +17,21 @@ import {
   formatBasePayLabel,
 } from "@/lib/dashboard/base-pay-presets";
 import { OptionalNonNegIntInput } from "@/components/dashboard/OptionalNonNegIntInput";
+import { AppSelect } from "@/components/ui/app-select";
+import { CREATOR_TYPE_SELECT_OPTIONS } from "@/lib/dashboard/creator-type-options";
 import { cn } from "@/lib/utils";
 
 const cell =
   "border-b border-white/[0.07] px-2 py-2 align-middle text-foreground";
 const thBase =
   "whitespace-nowrap border-b border-white/15 bg-white/[0.06] px-2 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted";
-/** Native selects: `[color-scheme:dark]` + `.bulk-native-select` align OS dropdown with panel palette. */
 const fieldClass =
   "h-9 w-full min-w-[7rem] rounded-md border border-white/10 bg-panel px-2 text-sm text-foreground outline-none transition [color-scheme:dark] focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
 
 const inputClass = fieldClass;
 
-const selectClass = cn(fieldClass, "bulk-native-select");
+const selectTriggerClass =
+  "h-9 w-full min-w-[7rem] border-white/10 bg-panel px-2 text-sm shadow-none hover:border-white/15 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
 
 function Req({ children }: { children: ReactNode }) {
   return (
@@ -214,67 +216,57 @@ function BulkTableRow({
         />
       </td>
       <td className={cn(cell, "min-w-[150px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.tableSegmentId}
-          onChange={(e) => onTableChange(e.target.value)}
+          onChange={onTableChange}
           aria-label={`Table row ${rowIndex + 1}`}
-        >
-          {tableSegments.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+          options={tableSegments.map((s) => ({
+            value: s.id,
+            label: s.label,
+          }))}
+        />
       </td>
       <td className={cn(cell, "min-w-[140px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.projectId}
-          onChange={(e) => onProjectChange(e.target.value)}
+          onChange={onProjectChange}
+          emptyLabel="Select campaign"
           aria-label={`Campaign row ${rowIndex + 1}`}
-        >
-          <option value="">Select campaign</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
+          options={projects.map((p) => ({
+            value: p.id,
+            label: p.name,
+          }))}
+        />
       </td>
       <td className={cn(cell, "min-w-[120px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.creatorType}
-          onChange={(e) => {
-            const creatorType = e.target.value as CreatorType;
+          onChange={(creatorType) => {
             patch({
-              creatorType,
+              creatorType: creatorType as CreatorType,
               basePay: defaultBasePayPreset(),
             });
           }}
           aria-label={`Creator type row ${rowIndex + 1}`}
-        >
-          <option value="Internal">Internal</option>
-          <option value="External">External</option>
-          <option value="AssetLoan">Asset Loan</option>
-        </select>
+          options={[...CREATOR_TYPE_SELECT_OPTIONS]}
+        />
       </td>
       <td className={cn(cell, "min-w-[160px]")}>
-        <select
-          className={selectClass}
+        <AppSelect
+          className={selectTriggerClass}
           value={row.tiktokAccountId}
-          onChange={(e) => patch({ tiktokAccountId: e.target.value })}
+          onChange={(tiktokAccountId) => patch({ tiktokAccountId })}
           disabled={!row.creatorId}
+          emptyLabel="Select TikTok account"
           aria-label={`TikTok account row ${rowIndex + 1}`}
-        >
-          <option value="">Select TikTok account</option>
-          {accountsForCreator.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
-            </option>
-          ))}
-        </select>
+          options={accountsForCreator.map((t) => ({
+            value: t.id,
+            label: t.label,
+          }))}
+        />
       </td>
       <td className={cn(cell, "min-w-[130px]")}>
         <input
@@ -302,18 +294,16 @@ function BulkTableRow({
         />
       </td>
       <td className={cn(cell, "min-w-[9rem]")}>
-        <select
-          className={selectClass}
-          value={row.basePay}
-          onChange={(e) => patch({ basePay: Number(e.target.value) })}
+        <AppSelect
+          className={selectTriggerClass}
+          value={String(row.basePay)}
+          onChange={(v) => patch({ basePay: Number(v) })}
           aria-label={`Base pay row ${rowIndex + 1}`}
-        >
-          {BASE_PAY_PRESET_VALUES.map((v) => (
-            <option key={v} value={v}>
-              {formatBasePayLabel(v)}
-            </option>
-          ))}
-        </select>
+          options={BASE_PAY_PRESET_VALUES.map((v) => ({
+            value: String(v),
+            label: formatBasePayLabel(v),
+          }))}
+        />
       </td>
       <td className={cn(cell, "w-12")}>
         {canRemove ? (

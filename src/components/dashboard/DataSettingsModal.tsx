@@ -22,12 +22,18 @@ import type {
   Project,
   TikTokAccount,
 } from "@/lib/types";
+import { AppSelect } from "@/components/ui/app-select";
+import { Spinner } from "@/components/ui/spinner";
+import { CREATOR_TYPE_SELECT_OPTIONS } from "@/lib/dashboard/creator-type-options";
 import { cn } from "@/lib/utils";
 import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
 import { normalizeBrandTableSegment } from "@/lib/dashboard/table-segments";
 
 const inputClass =
   "h-9 w-full min-w-0 rounded-md border border-white/10 bg-white/[0.04] px-2 text-sm text-foreground outline-none transition focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
+
+const settingsSelectTriggerClass =
+  "h-9 min-w-0 border-white/10 bg-white/[0.04] px-2 text-sm shadow-none hover:border-white/15 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
 
 function CommittedTextInput({
   className,
@@ -243,7 +249,13 @@ export function DataSettingsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] max-w-[min(96vw,720px)] flex-col gap-0 overflow-hidden border-neon-purple/20 p-0 sm:rounded-2xl">
+      <DialogContent
+        className="flex max-h-[90vh] max-w-[min(96vw,720px)] flex-col gap-0 overflow-hidden border-neon-purple/20 p-0 sm:rounded-2xl"
+        aria-busy={saving}
+      >
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          {saving ? "Menyimpan data settings dan sinkron ke workspace…" : ""}
+        </p>
         <DialogHeader className="shrink-0 border-b border-white/10 px-5 py-4 sm:px-6">
           <DialogTitle className="text-lg">Data settings</DialogTitle>
           <DialogDescription className="text-sm text-muted">
@@ -344,22 +356,20 @@ export function DataSettingsModal({
                       });
                     }}
                   />
-                  <select
-                    className={cn(inputClass, "min-w-[160px]")}
+                  <AppSelect
+                    className={cn(settingsSelectTriggerClass, "min-w-[160px]")}
                     value={p.brandId}
-                    onChange={(e) => {
+                    onChange={(brandId) => {
                       const next = [...draft.projects];
-                      next[i] = { ...p, brandId: e.target.value };
+                      next[i] = { ...p, brandId };
                       setDraft({ ...draft, projects: next });
                     }}
-                  >
-                    <option value="">Brand…</option>
-                    {mergedBrands.map((br) => (
-                      <option key={br.id} value={br.id}>
-                        {br.name}
-                      </option>
-                    ))}
-                  </select>
+                    emptyLabel="Brand…"
+                    options={mergedBrands.map((br) => ({
+                      value: br.id,
+                      label: br.name,
+                    }))}
+                  />
                   <button
                     type="button"
                     className="shrink-0 rounded-md border border-white/10 px-2 text-xs text-muted hover:border-red-400/40 hover:text-red-300"
@@ -434,22 +444,19 @@ export function DataSettingsModal({
                       });
                     }}
                   />
-                  <select
-                    className={cn(inputClass, "w-[120px]")}
+                  <AppSelect
+                    className={cn(settingsSelectTriggerClass, "w-[120px]")}
                     value={c.creatorType}
-                    onChange={(e) => {
+                    onChange={(creatorType) => {
                       const next = [...draft.creators];
                       next[i] = {
                         ...c,
-                        creatorType: e.target.value as CreatorType,
+                        creatorType: creatorType as CreatorType,
                       };
                       setDraft({ ...draft, creators: next });
                     }}
-                  >
-                    <option value="Internal">Internal</option>
-                    <option value="External">External</option>
-                    <option value="AssetLoan">Asset Loan</option>
-                  </select>
+                    options={[...CREATOR_TYPE_SELECT_OPTIONS]}
+                  />
                   <button
                     type="button"
                     className="shrink-0 rounded-md border border-white/10 px-2 text-xs text-muted hover:border-red-400/40 hover:text-red-300"
@@ -512,22 +519,20 @@ export function DataSettingsModal({
                       });
                     }}
                   />
-                  <select
-                    className={cn(inputClass, "min-w-[180px]")}
+                  <AppSelect
+                    className={cn(settingsSelectTriggerClass, "min-w-[180px]")}
                     value={t.creatorId}
-                    onChange={(e) => {
+                    onChange={(creatorId) => {
                       const next = [...draft.tiktokAccounts];
-                      next[i] = { ...t, creatorId: e.target.value };
+                      next[i] = { ...t, creatorId };
                       setDraft({ ...draft, tiktokAccounts: next });
                     }}
-                  >
-                    <option value="">Creator…</option>
-                    {mergedCreators.map((cr) => (
-                      <option key={cr.id} value={cr.id}>
-                        {cr.name}
-                      </option>
-                    ))}
-                  </select>
+                    emptyLabel="Creator…"
+                    options={mergedCreators.map((cr) => ({
+                      value: cr.id,
+                      label: cr.name,
+                    }))}
+                  />
                   <button
                     type="button"
                     className="shrink-0 rounded-md border border-white/10 px-2 text-xs text-muted hover:border-red-400/40 hover:text-red-300"
@@ -571,7 +576,8 @@ export function DataSettingsModal({
           <button
             type="button"
             onClick={() => onOpenChange(false)}
-            className="h-10 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-foreground"
+            disabled={saving}
+            className="h-10 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-foreground disabled:opacity-50"
           >
             Batal
           </button>
@@ -579,9 +585,16 @@ export function DataSettingsModal({
             type="button"
             disabled={saving}
             onClick={() => void handleSave()}
-            className="btn-press h-10 rounded-xl bg-gradient-to-r from-neon-cyan via-cyan-300 to-neon-purple px-5 text-sm font-semibold text-night disabled:opacity-50"
+            className="btn-press inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-neon-cyan via-cyan-300 to-neon-purple px-5 text-sm font-semibold text-night disabled:opacity-50"
           >
-            {saving ? "Menyimpan…" : "Simpan & sinkron"}
+            {saving ? (
+              <>
+                <Spinner className="h-4 w-4 text-night" />
+                Menyimpan…
+              </>
+            ) : (
+              "Simpan & sinkron"
+            )}
           </button>
         </DialogFooter>
       </DialogContent>

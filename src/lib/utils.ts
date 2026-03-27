@@ -33,3 +33,10 @@ export function labelMonth(key: string): string {
     year: "numeric",
   }).format(parseMonthKey(key));
 }
+
+/** `monthKey` format `YYYY-MM`, `delta` e.g. -1 = bulan sebelumnya. */
+export function addMonthsToMonthKey(monthKey: string, delta: number): string {
+  const d = parseMonthKey(monthKey);
+  d.setMonth(d.getMonth() + delta);
+  return monthKeyFromDate(d);
+}

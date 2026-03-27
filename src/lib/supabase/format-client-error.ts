@@ -83,8 +83,23 @@ export function formatSupabaseClientError(e: unknown): string {
     return [
       "Kolom creator_targets.submitted_video_urls belum ada (simpan link video / upsert target).",
       "Supabase → SQL Editor: jalankan supabase/migrations/008_submitted_video_urls.sql, lalu: NOTIFY pgrst, 'reload schema';",
-      "Atau jalan urutan incremental: supabase/manual/apply_migrations_005_to_008.sql (sudah termasuk 008).",
+      "Atau jalan urutan incremental: supabase/manual/apply_migrations_005_to_008.sql (termasuk 008–009 + NOTIFY di akhir).",
       "Lokal: npm run db:apply-video-urls (perlu DATABASE_URL di .env.local).",
+      "Detail: cursor-docs/supabase-setup.md.",
+    ].join(" ");
+  }
+
+  if (
+    lower.includes("workspace_activity_log") &&
+    (lower.includes("does not exist") ||
+      lower.includes("could not find the table") ||
+      lower.includes("schema cache") ||
+      codeU === "PGRST205")
+  ) {
+    return [
+      "Tabel workspace_activity_log (Riwayat perubahan) belum ada atau cache PostgREST belum mengenalinya.",
+      "Supabase → SQL Editor: jalankan supabase/migrations/009_workspace_activity_log.sql atau supabase/manual/apply_migration_009_workspace_activity_log.sql, lalu: NOTIFY pgrst, 'reload schema';",
+      "Jika DB sudah 001–008: cukup jalankan supabase/manual/apply_migrations_005_to_008.sql sekali (bagian 009 idempotent; NOTIFY di akhir).",
       "Detail: cursor-docs/supabase-setup.md.",
     ].join(" ");
   }
@@ -96,8 +111,8 @@ export function formatSupabaseClientError(e: unknown): string {
   ) {
     return [
       "Tabel di Postgres belum dibuat atau cache API belum mengenali skema.",
-      "DB baru: jalankan sekali supabase/manual/apply_all_migrations.sql (001–008 + RPC + NOTIFY).",
-      "Sudah punya 001–004: jangan ulang apply_all utuh — jalankan supabase/manual/apply_migrations_005_to_008.sql lalu NOTIFY (sudah di akhir file).",
+      "DB baru: jalankan sekali supabase/manual/apply_all_migrations.sql (001–009 + RPC + NOTIFY).",
+      "Sudah punya 001–004: jangan ulang apply_all utuh — jalankan supabase/manual/apply_migrations_005_to_008.sql lalu NOTIFY (sudah di akhir file; termasuk 009).",
       "Hanya cache ketinggal: SQL Editor → NOTIFY pgrst, 'reload schema'; atau tunggu retry otomatis setelah migrasi 004.",
       "Detail: cursor-docs/supabase-setup.md.",
     ].join(" ");

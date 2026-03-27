@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 import { BulkTargetSubmissionsTable } from "@/components/dashboard/BulkTargetSubmissionsTable";
 import { useFormSettings } from "@/hooks/useFormSettings";
@@ -23,7 +24,7 @@ import type {
   TargetFormRow,
   TikTokAccount,
 } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, labelMonth } from "@/lib/utils";
 import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
 import {
   BASE_PAY_PRESET_VALUES,
@@ -70,7 +71,7 @@ interface SubmitTargetsModalProps {
   projects: Project[];
   tiktokAccounts: TikTokAccount[];
   tableSegments: TableSegmentOption[];
-  onSubmitTargets: (rows: TargetFormRow[]) => void | Promise<void>;
+  onSubmitTargets: (rows: TargetFormRow[]) => boolean | Promise<boolean>;
 }
 
 export function SubmitTargetsModal({
@@ -101,6 +102,7 @@ export function SubmitTargetsModal({
   const [rows, setRows] = useState<TargetFormRow[]>(() => [
     emptyRow(selectedMonth),
   ]);
+  const [submitting, setSubmitting] = useState(false);
 
   const handleDialogOpenChange = (next: boolean) => {
     if (next) {
@@ -142,14 +144,23 @@ export function SubmitTargetsModal({
         return;
       }
     }
+    setSubmitting(true);
     try {
-      await Promise.resolve(onSubmitTargets(rows));
-      toast.success("Data tersimpan — dashboard diperbarui.");
-      handleDialogOpenChange(false);
+      const ok = await onSubmitTargets(rows);
+      if (ok) {
+        const n = rows.length;
+        const m = labelMonth(selectedMonth);
+        toast.success("Target tersimpan", {
+          description: `${n} baris untuk ${m} — dashboard diperbarui.`,
+        });
+        handleDialogOpenChange(false);
+      }
     } catch (e) {
       toast.error("Gagal menyimpan", {
         description: formatSupabaseClientError(e),
       });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -171,7 +182,11 @@ export function SubmitTargetsModal({
       <DialogContent
         className="flex max-h-[92vh] flex-col gap-0 overflow-hidden border-neon-cyan/15 p-0 sm:max-w-[min(96vw,1200px)]"
         showClose
+        aria-busy={submitting}
       >
+        <p className="sr-only" aria-live="polite" aria-atomic="true">
+          {submitting ? "Menyimpan target ke workspace…" : ""}
+        </p>
         <DialogHeader className="sr-only shrink-0">
           <DialogTitle>Bulk Target Submissions</DialogTitle>
           <DialogDescription>
@@ -217,7 +232,8 @@ export function SubmitTargetsModal({
             <button
               type="button"
               onClick={() => handleDialogOpenChange(false)}
-              className="h-11 rounded-xl border border-white/10 bg-white/[0.03] px-5 text-sm font-semibold text-foreground transition hover:border-neon-purple/35 hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-neon-purple/30"
+              disabled={submitting}
+              className="h-11 rounded-xl border border-white/10 bg-white/[0.03] px-5 text-sm font-semibold text-foreground transition hover:border-neon-purple/35 hover:bg-white/[0.05] focus:outline-none focus:ring-2 focus:ring-neon-purple/30 disabled:opacity-50"
             >
               Cancel
             </button>
@@ -230,15 +246,23 @@ export function SubmitTargetsModal({
               </p>
               <button
                 type="button"
-                onClick={handleSubmit}
+                onClick={() => void handleSubmit()}
+                disabled={submitting || !hasOptions}
                 className={cn(
-                  "btn-press h-11 rounded-xl px-6 text-sm font-semibold text-night",
+                  "btn-press inline-flex h-11 items-center justify-center gap-2 rounded-xl px-6 text-sm font-semibold text-night",
                   "bg-gradient-to-r from-neon-cyan via-cyan-300 to-neon-purple",
                   "shadow-[0_0_28px_rgba(50,230,255,0.35)]",
-                  "transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50",
+                  "transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-neon-cyan/50 disabled:opacity-50",
                 )}
               >
-                Submit data
+                {submitting ? (
+                  <>
+                    <Spinner className="h-4 w-4 text-night" />
+                    Menyimpan…
+                  </>
+                ) : (
+                  "Submit data"
+                )}
               </button>
             </div>
           </div>
