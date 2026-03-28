@@ -29,6 +29,7 @@ import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
 import {
   BASE_PAY_PRESET_VALUES,
   defaultBasePayPreset,
+  formatBasePayLabel,
 } from "@/lib/dashboard/base-pay-presets";
 import { TABLE_SEGMENT_TNC } from "@/lib/dashboard/table-segments";
 import type { TableSegmentOption } from "@/components/dashboard/QuickFilterChips";
@@ -57,8 +58,10 @@ function validateRow(row: TargetFormRow): string | null {
   if (row.targetVideos < 0) return "Target videos must be 0 or more.";
   if (row.incentivePerVideo < 0)
     return "Incentive per video must be 0 or more.";
-  if (!basePayAllowed.has(row.basePay))
-    return "Base pay harus salah satu: 785.000, 1.570.000, atau 2.350.000.";
+  if (!basePayAllowed.has(row.basePay)) {
+    const opts = BASE_PAY_PRESET_VALUES.map(formatBasePayLabel).join(" atau ");
+    return `Base pay harus salah satu: ${opts}.`;
+  }
   return null;
 }
 

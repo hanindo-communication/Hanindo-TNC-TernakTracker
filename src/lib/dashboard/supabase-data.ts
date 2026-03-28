@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { defaultBasePayByType } from "@/lib/mock-data";
+import { BASE_PAY_PRESET_VALUES } from "@/lib/dashboard/base-pay-presets";
 import { SHARED_DASHBOARD_USER_ID } from "@/lib/dashboard/shared-workspace";
 import { withPostgrestSchemaRetry } from "@/lib/supabase/postgrest-retry";
 import { parseTableSegmentFromDb } from "@/lib/dashboard/table-segments";
@@ -548,8 +548,10 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
   const tt3 = t3!.id as string;
 
   const month = "2026-03";
+  const presetLow = BASE_PAY_PRESET_VALUES[0];
+  const presetHigh = BASE_PAY_PRESET_VALUES[1];
 
-  const targetPayloads = [
+  const targetSeedBases = [
     {
       user_id: wid,
       creator_id: c1,
@@ -558,17 +560,13 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
       creator_type: "Internal" as const,
       tiktok_account_id: tt1,
       month,
+      table_segment: "tnc",
       target_videos: 24,
       submitted_videos: 22,
-      submitted_video_urls: [],
+      submitted_video_urls: [] as string[],
       incentive_per_video: 120,
-      base_pay: defaultBasePayByType.Internal,
-      expected_revenue: 4080,
-      actual_revenue: 3920,
-      incentives: 400,
+      base_pay: presetLow,
       reimbursements: 120,
-      expected_profit: 3360,
-      actual_profit: 3180,
     },
     {
       user_id: wid,
@@ -578,17 +576,13 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
       creator_type: "Internal" as const,
       tiktok_account_id: tt1,
       month,
+      table_segment: "folo",
       target_videos: 12,
       submitted_videos: 11,
-      submitted_video_urls: [],
+      submitted_video_urls: [] as string[],
       incentive_per_video: 100,
-      base_pay: defaultBasePayByType.Internal,
-      expected_revenue: 2400,
-      actual_revenue: 2280,
-      incentives: 200,
+      base_pay: presetLow,
       reimbursements: 80,
-      expected_profit: 1920,
-      actual_profit: 1820,
     },
     {
       user_id: wid,
@@ -598,17 +592,13 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
       creator_type: "External" as const,
       tiktok_account_id: tt2,
       month,
+      table_segment: "folo",
       target_videos: 18,
       submitted_videos: 14,
-      submitted_video_urls: [],
+      submitted_video_urls: [] as string[],
       incentive_per_video: 90,
-      base_pay: defaultBasePayByType.External,
-      expected_revenue: 2420,
-      actual_revenue: 1980,
-      incentives: 280,
+      base_pay: presetHigh,
       reimbursements: 140,
-      expected_profit: 1800,
-      actual_profit: 1420,
     },
     {
       user_id: wid,
@@ -618,19 +608,60 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
       creator_type: "AssetLoan" as const,
       tiktok_account_id: tt3,
       month,
+      table_segment: "tnc",
       target_videos: 10,
       submitted_videos: 12,
-      submitted_video_urls: [],
+      submitted_video_urls: [] as string[],
       incentive_per_video: 70,
-      base_pay: defaultBasePayByType.AssetLoan,
-      expected_revenue: 1200,
-      actual_revenue: 1340,
-      incentives: 150,
+      base_pay: presetHigh,
       reimbursements: 60,
-      expected_profit: 990,
-      actual_profit: 1130,
     },
   ];
+
+  const targetPayloads = targetSeedBases.map((row) => {
+    const t = syncDerivedFinancials({
+      id: "",
+      creatorId: row.creator_id,
+      projectId: row.project_id,
+      campaignObjectiveId: row.campaign_objective_id,
+      creatorType: row.creator_type,
+      tiktokAccountId: row.tiktok_account_id,
+      month: row.month,
+      tableSegmentId: parseTargetTableSegment(row.table_segment),
+      targetVideos: row.target_videos,
+      submittedVideos: row.submitted_videos,
+      submittedVideoUrls: [...row.submitted_video_urls],
+      incentivePerVideo: row.incentive_per_video,
+      basePay: row.base_pay,
+      reimbursements: row.reimbursements,
+      expectedRevenue: 0,
+      actualRevenue: 0,
+      incentives: 0,
+      expectedProfit: 0,
+      actualProfit: 0,
+    });
+    return {
+      user_id: row.user_id,
+      creator_id: row.creator_id,
+      project_id: row.project_id,
+      campaign_objective_id: row.campaign_objective_id,
+      creator_type: row.creator_type,
+      tiktok_account_id: row.tiktok_account_id,
+      month: row.month,
+      table_segment: row.table_segment,
+      target_videos: t.targetVideos,
+      submitted_videos: t.submittedVideos,
+      submitted_video_urls: t.submittedVideoUrls ?? [],
+      incentive_per_video: t.incentivePerVideo,
+      base_pay: t.basePay,
+      expected_revenue: t.expectedRevenue,
+      actual_revenue: t.actualRevenue,
+      incentives: t.incentives,
+      reimbursements: t.reimbursements,
+      expected_profit: t.expectedProfit,
+      actual_profit: t.actualProfit,
+    };
+  });
 
   const { error: te } = await supabase.from("creator_targets").insert(targetPayloads);
   if (te) throw te;
@@ -690,4 +721,4 @@ export async function fetchWorkspaceActivityLog(
   });
 }
 
-export { defaultBasePayByType };
+export { defaultBasePayByType } from "@/lib/mock-data";

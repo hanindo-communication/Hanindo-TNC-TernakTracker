@@ -123,11 +123,7 @@ export function EditCreatorTargetsDialog({
     });
   const [saving, setSaving] = useState(false);
 
-  const basePayOptions = useMemo(() => {
-    const s = new Set<number>([...BASE_PAY_PRESET_VALUES]);
-    for (const r of rows) s.add(r.basePay);
-    return [...s].sort((a, b) => a - b);
-  }, [rows]);
+  const basePayOptions = useMemo(() => [...BASE_PAY_PRESET_VALUES], []);
 
   useEffect(() => {
     if (!open) return;

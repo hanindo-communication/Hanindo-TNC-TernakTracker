@@ -1,3 +1,4 @@
+import { syncDerivedFinancials } from "@/lib/dashboard/merge-targets";
 import type {
   Brand,
   CampaignObjective,
@@ -85,19 +86,19 @@ export const tiktokAccounts: TikTokAccount[] = [
   { id: "tt-3", creatorId: "cr-3", label: "@jordanvale (alt)" },
 ];
 
-/** Default base pay by creator type — swap with rate-card API later */
+/** Default base pay by creator type — selaras dengan {@link BASE_PAY_PRESET_VALUES} */
 export const defaultBasePayByType: Record<
   Creator["creatorType"],
   number
 > = {
-  Internal: 1200,
-  External: 800,
-  AssetLoan: 500,
+  Internal: 785_350,
+  External: 785_350,
+  AssetLoan: 2_356_050,
 };
 
 const MONTH = "2026-03";
 
-export const initialTargets: CreatorTarget[] = [
+const rawInitialTargets: CreatorTarget[] = [
   {
     id: "t-1",
     creatorId: "cr-1",
@@ -111,13 +112,13 @@ export const initialTargets: CreatorTarget[] = [
     submittedVideos: 22,
     submittedVideoUrls: [],
     incentivePerVideo: 120,
-    basePay: 1200,
-    expectedRevenue: 4080,
-    actualRevenue: 3920,
-    incentives: 400,
+    basePay: 785_350,
+    expectedRevenue: 0,
+    actualRevenue: 0,
+    incentives: 0,
     reimbursements: 120,
-    expectedProfit: 3360,
-    actualProfit: 3180,
+    expectedProfit: 0,
+    actualProfit: 0,
   },
   {
     id: "t-2",
@@ -132,13 +133,13 @@ export const initialTargets: CreatorTarget[] = [
     submittedVideos: 11,
     submittedVideoUrls: [],
     incentivePerVideo: 100,
-    basePay: 1200,
-    expectedRevenue: 2400,
-    actualRevenue: 2280,
-    incentives: 200,
+    basePay: 785_350,
+    expectedRevenue: 0,
+    actualRevenue: 0,
+    incentives: 0,
     reimbursements: 80,
-    expectedProfit: 1920,
-    actualProfit: 1820,
+    expectedProfit: 0,
+    actualProfit: 0,
   },
   {
     id: "t-3",
@@ -153,13 +154,13 @@ export const initialTargets: CreatorTarget[] = [
     submittedVideos: 14,
     submittedVideoUrls: [],
     incentivePerVideo: 90,
-    basePay: 800,
-    expectedRevenue: 2420,
-    actualRevenue: 1980,
-    incentives: 280,
+    basePay: 2_356_050,
+    expectedRevenue: 0,
+    actualRevenue: 0,
+    incentives: 0,
     reimbursements: 140,
-    expectedProfit: 1800,
-    actualProfit: 1420,
+    expectedProfit: 0,
+    actualProfit: 0,
   },
   {
     id: "t-4",
@@ -174,12 +175,16 @@ export const initialTargets: CreatorTarget[] = [
     submittedVideos: 12,
     submittedVideoUrls: [],
     incentivePerVideo: 70,
-    basePay: 500,
-    expectedRevenue: 1200,
-    actualRevenue: 1340,
-    incentives: 150,
+    basePay: 2_356_050,
+    expectedRevenue: 0,
+    actualRevenue: 0,
+    incentives: 0,
     reimbursements: 60,
-    expectedProfit: 990,
-    actualProfit: 1130,
+    expectedProfit: 0,
+    actualProfit: 0,
   },
 ];
+
+export const initialTargets: CreatorTarget[] = rawInitialTargets.map((t) =>
+  syncDerivedFinancials(t),
+);

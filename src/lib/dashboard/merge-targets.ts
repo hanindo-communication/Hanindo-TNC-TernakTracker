@@ -1,3 +1,4 @@
+import { normalizeBasePayForSync } from "@/lib/dashboard/base-pay-presets";
 import { FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE } from "@/lib/dashboard/financial-rules";
 import { filterPlausibleVideoUrls } from "@/lib/dashboard/video-urls";
 import type { CreatorTarget, TargetFormRow } from "@/lib/types";
@@ -17,7 +18,7 @@ import {
  */
 export function syncDerivedFinancials(t: CreatorTarget): CreatorTarget {
   const tv = Math.max(0, Math.floor(Number(t.targetVideos)) || 0);
-  const bp = Math.max(0, Number(t.basePay) || 0);
+  const bp = normalizeBasePayForSync(t.basePay);
   const ipv = Math.max(0, Math.floor(Number(t.incentivePerVideo)) || 0);
   const expectedRevenue = tv * bp;
   const incentives = tv * ipv;
