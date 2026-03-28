@@ -62,7 +62,18 @@ export interface CreatorTarget {
   submittedVideos: number;
   /** URL TikTok per video disimpan; jika kosong, hitungan mengikuti `submittedVideos` saja. */
   submittedVideoUrls: string[];
+  /** Model lama: honorarium per video; dipakai hanya jika ketiga % sharing di bawah 1. */
   incentivePerVideo: number;
+  /**
+   * Model baru: % dari **expected revenue** baris = target × base pay (1–100 tiap kolom jika semua ≥ 1).
+   * Jika tidak dipakai (0), hitungan insentif dari `incentivePerVideo`.
+   */
+  incentivePercent: number;
+  tncSharingPercent: number;
+  hndSharingPercent: number;
+  /** Nominal TNC / HND dari model %; 0 jika baris memakai model `incentive_per_video`. */
+  tncSharingAmount: number;
+  hndSharingAmount: number;
   basePay: number;
   expectedRevenue: number;
   actualRevenue: number;
@@ -81,7 +92,10 @@ export interface TargetFormRow {
   tiktokAccountId: string;
   month: string;
   targetVideos: number;
-  incentivePerVideo: number;
+  /** % dari expected revenue baris (target × base pay); wajib 1–100 saat submit. */
+  incentivePercent: number;
+  tncSharingPercent: number;
+  hndSharingPercent: number;
   basePay: number;
 }
 

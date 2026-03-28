@@ -27,10 +27,14 @@ import {
   DEFAULT_HANINDO_SHARING_PERCENT,
   mergeHanindoPercentsFromCreators,
 } from "@/lib/dashboard/creator-financial-overrides";
+import { splitErForTncHndColumns } from "@/lib/dashboard/financial-rules";
+import {
+  inferSharingPercentsForEdit,
+  usesSharingPercentModel,
+} from "@/lib/dashboard/merge-targets";
 import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
 import { formatCurrency, labelMonth } from "@/lib/utils";
 import {
-  splitErForTncHndColumns,
   type AggregatedCreatorRow,
   type BreakdownRow,
   type TotalRow,
@@ -83,10 +87,6 @@ interface PerformanceTableProps {
   ) => void;
   onOpenSubmitVideosForCreator: (creatorId: string) => void;
   onDeleteCreatorTargets: (creatorId: string) => void | Promise<void>;
-  onPersistHanindoPercent: (
-    creatorId: string,
-    percent: number,
-  ) => void | Promise<void>;
   onReplaceTargetVideoLinks: (
     targetId: string,
     urls: string[],
@@ -120,7 +120,6 @@ export function PerformanceTable({
   onToggleAllVideoSubmitTargets,
   onOpenSubmitVideosForCreator,
   onDeleteCreatorTargets,
-  onPersistHanindoPercent,
   onReplaceTargetVideoLinks,
   onUpdateCreatorTargetMonth,
   highlightedCreatorId = null,
@@ -134,10 +133,6 @@ export function PerformanceTable({
     [creators, hanindoLocalSnapshot],
   );
   const defaultHanindoPct = DEFAULT_HANINDO_SHARING_PERCENT;
-  const resolveHanindoPercent = useCallback(
-    (id: string) => hanindoPctByCreator[id] ?? defaultHanindoPct,
-    [hanindoPctByCreator, defaultHanindoPct],
-  );
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [editCtx, setEditCtx] = useState<{
     creatorId: string;
@@ -149,7 +144,9 @@ export function PerformanceTable({
       targetVideos: number;
       tableSegmentId: string;
       basePay: number;
-      incentivePerVideo: number;
+      incentivePercent: number;
+      tncSharingPercent: number;
+      hndSharingPercent: number;
     }[];
   } | null>(null);
 
@@ -392,18 +389,29 @@ export function PerformanceTable({
                             text="Edit"
                             onClick={() => {
                               const b = breakdownByCreator(row.creatorId);
+                              const hndRate =
+                                (hanindoPctByCreator[row.creatorId] ??
+                                  defaultHanindoPct) / 100;
                               setEditCtx({
                                 creatorId: row.creatorId,
                                 creatorName: c.name,
-                                rows: b.map((x) => ({
-                                  targetId: x.targetId,
-                                  projectName: x.projectName,
-                                  campaignLabel: x.campaignLabel,
-                                  targetVideos: x.targetVideos,
-                                  tableSegmentId: x.tableSegmentId,
-                                  basePay: x.basePay,
-                                  incentivePerVideo: x.incentivePerVideo,
-                                })),
+                                rows: b.map((x) => {
+                                  const p = inferSharingPercentsForEdit(
+                                    x,
+                                    hndRate,
+                                  );
+                                  return {
+                                    targetId: x.targetId,
+                                    projectName: x.projectName,
+                                    campaignLabel: x.campaignLabel,
+                                    targetVideos: x.targetVideos,
+                                    tableSegmentId: x.tableSegmentId,
+                                    basePay: x.basePay,
+                                    incentivePercent: p.incentivePercent,
+                                    tncSharingPercent: p.tncSharingPercent,
+                                    hndSharingPercent: p.hndSharingPercent,
+                                  };
+                                }),
                               });
                             }}
                           />
@@ -608,12 +616,18 @@ export function PerformanceTable({
                                   const hndRate =
                                     (hanindoPctByCreator[b.creatorId] ??
                                       defaultHanindoPct) / 100;
+                                  const usePctRow = usesSharingPercentModel(b);
                                   const { tncExpectedProfit, hndExpectedProfit } =
-                                    splitErForTncHndColumns(
-                                      b.expectedRevenue,
-                                      b.incentives,
-                                      hndRate,
-                                    );
+                                    usePctRow
+                                      ? {
+                                          tncExpectedProfit: b.tncSharingAmount,
+                                          hndExpectedProfit: b.hndSharingAmount,
+                                        }
+                                      : splitErForTncHndColumns(
+                                          b.expectedRevenue,
+                                          b.incentives,
+                                          hndRate,
+                                        );
                                   return (
                                   <tr
                                     key={b.targetId}
@@ -741,8 +755,6 @@ export function PerformanceTable({
         creatorName={editCtx?.creatorName ?? ""}
         rows={editCtx?.rows ?? []}
         tableSegments={tableSegments}
-        resolveHanindoPercent={resolveHanindoPercent}
-        onPersistHanindoPercent={onPersistHanindoPercent}
         onSave={onUpdateTargetRows}
         onSaveSuccess={() => {
           const id = editCtx?.creatorId;

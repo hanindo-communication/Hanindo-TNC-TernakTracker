@@ -23,6 +23,7 @@ import {
   mergeTargetForms,
   replaceSubmittedVideoUrls,
   syncDerivedFinancials,
+  usesSharingPercentModel,
   type CreatorTargetRowSave,
 } from "@/lib/dashboard/merge-targets";
 import { createClient } from "@/lib/supabase/client";
@@ -36,7 +37,7 @@ import {
   DEFAULT_HANINDO_SHARING_PERCENT,
   mergeHanindoPercentsFromCreators,
 } from "@/lib/dashboard/creator-financial-overrides";
-import { HANINDO_SHARING_RATE_ON_TARGET_REVENUE } from "@/lib/dashboard/financial-rules";
+import { splitErForTncHndColumns } from "@/lib/dashboard/financial-rules";
 import {
   TABLE_CHIP_OPTIONS,
   targetMatchesTableQuickFilter,
@@ -56,24 +57,6 @@ import { addMonthsToMonthKey } from "@/lib/utils";
 function labelTableSegment(raw: string): string {
   const seg = normalizeTargetTableSegmentForKey(raw);
   return TABLE_CHIP_OPTIONS.find((o) => o.id === seg)?.label ?? seg;
-}
-
-/**
- * Alokasi perf table: ER = incentives + [TNC] + [HND], [HND] = hanindoRate × ER.
- * hanindoRate: 0–0,5 (default dari konstant overview). Per creator bisa di localStorage.
- */
-export function splitErForTncHndColumns(
-  expectedRevenue: number,
-  incentives: number,
-  hanindoRate: number = HANINDO_SHARING_RATE_ON_TARGET_REVENUE,
-): { tncExpectedProfit: number; hndExpectedProfit: number } {
-  const r = Math.max(
-    0,
-    Math.min(0.5, Number.isFinite(hanindoRate) ? hanindoRate : 0),
-  );
-  const hndExpectedProfit = r * expectedRevenue;
-  const tncExpectedProfit = expectedRevenue - incentives - hndExpectedProfit;
-  return { tncExpectedProfit, hndExpectedProfit };
 }
 
 export interface AggregatedCreatorRow {
@@ -105,6 +88,9 @@ export interface BreakdownRow {
   tableSegmentId: string;
   basePay: number;
   incentivePerVideo: number;
+  incentivePercent: number;
+  tncSharingPercent: number;
+  hndSharingPercent: number;
   campaignObjectiveId: string;
   campaignLabel: string;
   creatorType: CreatorTarget["creatorType"];
@@ -119,6 +105,8 @@ export interface BreakdownRow {
   reimbursements: number;
   expectedProfit: number;
   actualProfit: number;
+  tncSharingAmount: number;
+  hndSharingAmount: number;
 }
 
 export interface TotalRow extends AggregatedCreatorRow {
@@ -180,11 +168,22 @@ function buildVisibleTableAggregation(
     const creatorIncentives = sum(rows.map((r) => r.incentives));
     const hndPct =
       hanindoPercentByCreator[cid] ?? DEFAULT_HANINDO_SHARING_PERCENT;
-    const { tncExpectedProfit, hndExpectedProfit } = splitErForTncHndColumns(
-      creatorExpectedRevenue,
-      creatorIncentives,
-      hndPct / 100,
-    );
+    let tncExpectedProfit = 0;
+    let hndExpectedProfit = 0;
+    for (const r of rows) {
+      if (usesSharingPercentModel(r)) {
+        tncExpectedProfit += r.tncSharingAmount;
+        hndExpectedProfit += r.hndSharingAmount;
+      } else {
+        const split = splitErForTncHndColumns(
+          r.expectedRevenue,
+          r.incentives,
+          hndPct / 100,
+        );
+        tncExpectedProfit += split.tncExpectedProfit;
+        hndExpectedProfit += split.hndExpectedProfit;
+      }
+    }
     const monthKeys = [...new Set(rows.map((r) => r.month))];
     const targetMonthKey = monthKeys.length === 1 ? monthKeys[0]! : null;
     return {
@@ -433,6 +432,9 @@ export function useCreatorDashboard(options?: {
           tableSegmentId: t.tableSegmentId,
           basePay: t.basePay,
           incentivePerVideo: t.incentivePerVideo,
+          incentivePercent: t.incentivePercent,
+          tncSharingPercent: t.tncSharingPercent,
+          hndSharingPercent: t.hndSharingPercent,
           campaignObjectiveId: t.campaignObjectiveId,
           campaignLabel: camp?.label ?? t.campaignObjectiveId,
           creatorType: t.creatorType,
@@ -447,6 +449,8 @@ export function useCreatorDashboard(options?: {
           reimbursements: t.reimbursements,
           expectedProfit: t.expectedProfit,
           actualProfit: t.actualProfit,
+          tncSharingAmount: t.tncSharingAmount,
+          hndSharingAmount: t.hndSharingAmount,
         };
       });
     },
@@ -537,7 +541,9 @@ export function useCreatorDashboard(options?: {
             targetVideos: u.targetVideos,
             tableSegmentId: u.tableSegmentId,
             basePay: u.basePay,
-            incentivePerVideo: u.incentivePerVideo,
+            incentivePercent: u.incentivePercent,
+            tncSharingPercent: u.tncSharingPercent,
+            hndSharingPercent: u.hndSharingPercent,
           });
         });
         return { ...p, targets: nextTargets };

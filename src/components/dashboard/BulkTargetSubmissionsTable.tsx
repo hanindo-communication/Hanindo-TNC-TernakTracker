@@ -30,8 +30,22 @@ const fieldClass =
 
 const inputClass = fieldClass;
 
+/** Input % lebih ramping; angka 1–100 saja. */
+const pctInputClass =
+  "h-9 w-full min-w-[3.25rem] max-w-[5rem] rounded-md border border-white/10 bg-panel px-1.5 text-center text-sm tabular-nums text-foreground outline-none transition [color-scheme:dark] focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
+
 const selectTriggerClass =
   "h-9 w-full min-w-[7rem] border-white/10 bg-panel px-2 text-sm shadow-none hover:border-white/15 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
+
+const DEFAULT_SHARING_PCT = {
+  incentivePercent: 31,
+  tncSharingPercent: 54,
+  hndSharingPercent: 15,
+} as const;
+
+function clampSubmitPct(n: number): number {
+  return Math.min(100, Math.max(1, Math.round(Number(n)) || 0));
+}
 
 function Req({ children }: { children: ReactNode }) {
   return (
@@ -105,8 +119,21 @@ export function BulkTargetSubmissionsTable({
         </div>
       </div>
 
+      <p className="border-b border-white/[0.07] px-4 py-2.5 text-[11px] leading-relaxed text-muted sm:px-6">
+        Isi <span className="font-semibold text-foreground/90">target</span> dan{" "}
+        <span className="font-semibold text-foreground/90">base pay</span>, lalu
+        tiga persentase: nominal ={" "}
+        <span className="font-semibold text-foreground/90">
+          expected revenue
+        </span>{" "}
+        baris itu (
+        <span className="font-mono text-foreground/80">target × base pay</span>)
+        dikali persen — sama dengan di tabel performance (insentif / [TNC] /
+        [HND] dijumlahkan per creator).
+      </p>
+
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1040px] border-collapse text-sm">
+        <table className="w-full min-w-[1280px] border-collapse text-sm">
           <thead>
             <tr>
               <th className={thBase}>
@@ -130,8 +157,27 @@ export function BulkTargetSubmissionsTable({
               <th className={thBase}>
                 <Req>Target</Req>
               </th>
-              <th className={thBase}>Incentive per Video</th>
-              <th className={thBase}>Base Pay</th>
+              <th className={thBase}>
+                <Req>Base pay</Req>
+              </th>
+              <th className={`${thBase} font-semibold normal-case tracking-normal`}>
+                <span className="block">Incentive per video</span>
+                <span className="mt-1 block text-[9px] font-normal uppercase tracking-wider text-muted/85">
+                  % dari exp. rev.
+                </span>
+              </th>
+              <th className={`${thBase} font-semibold normal-case tracking-normal`}>
+                <span className="block">TNC sharing</span>
+                <span className="mt-1 block text-[9px] font-normal uppercase tracking-wider text-muted/85">
+                  % dari exp. rev.
+                </span>
+              </th>
+              <th className={`${thBase} font-semibold normal-case tracking-normal`}>
+                <span className="block">HND sharing</span>
+                <span className="mt-1 block text-[9px] font-normal uppercase tracking-wider text-muted/85">
+                  % dari exp. rev.
+                </span>
+              </th>
               <th className={thBase} aria-label="Row actions" />
             </tr>
           </thead>
@@ -203,6 +249,9 @@ function BulkTableRow({
       creatorType: c?.creatorType ?? row.creatorType,
       tiktokAccountId: firstTt?.id ?? "",
       basePay: defaultBasePayPreset(),
+      incentivePercent: DEFAULT_SHARING_PCT.incentivePercent,
+      tncSharingPercent: DEFAULT_SHARING_PCT.tncSharingPercent,
+      hndSharingPercent: DEFAULT_SHARING_PCT.hndSharingPercent,
     });
   };
 
@@ -248,6 +297,9 @@ function BulkTableRow({
             patch({
               creatorType: creatorType as CreatorType,
               basePay: defaultBasePayPreset(),
+              incentivePercent: DEFAULT_SHARING_PCT.incentivePercent,
+              tncSharingPercent: DEFAULT_SHARING_PCT.tncSharingPercent,
+              hndSharingPercent: DEFAULT_SHARING_PCT.hndSharingPercent,
             });
           }}
           aria-label={`Creator type row ${rowIndex + 1}`}
@@ -285,14 +337,6 @@ function BulkTableRow({
           aria-label={`Target videos row ${rowIndex + 1}`}
         />
       </td>
-      <td className={cn(cell, "min-w-[110px]")}>
-        <OptionalNonNegIntInput
-          className={inputClass}
-          value={row.incentivePerVideo}
-          onCommit={(n) => patch({ incentivePerVideo: n })}
-          aria-label={`Incentive per video row ${rowIndex + 1}`}
-        />
-      </td>
       <td className={cn(cell, "min-w-[9rem]")}>
         <AppSelect
           className={selectTriggerClass}
@@ -303,6 +347,54 @@ function BulkTableRow({
             value: String(v),
             label: formatBasePayLabel(v),
           }))}
+        />
+      </td>
+      <td className={cn(cell, "w-[4.5rem]")}>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          step={1}
+          className={pctInputClass}
+          value={row.incentivePercent}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            patch({ incentivePercent: clampSubmitPct(n) });
+          }}
+          aria-label={`Incentive per video % dari expected revenue baris, row ${rowIndex + 1}`}
+        />
+      </td>
+      <td className={cn(cell, "w-[4.5rem]")}>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          step={1}
+          className={pctInputClass}
+          value={row.tncSharingPercent}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            patch({ tncSharingPercent: clampSubmitPct(n) });
+          }}
+          aria-label={`TNC sharing % dari expected revenue baris, row ${rowIndex + 1}`}
+        />
+      </td>
+      <td className={cn(cell, "w-[4.5rem]")}>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          step={1}
+          className={pctInputClass}
+          value={row.hndSharingPercent}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            patch({ hndSharingPercent: clampSubmitPct(n) });
+          }}
+          aria-label={`HND sharing % dari expected revenue baris, row ${rowIndex + 1}`}
         />
       </td>
       <td className={cn(cell, "w-12")}>

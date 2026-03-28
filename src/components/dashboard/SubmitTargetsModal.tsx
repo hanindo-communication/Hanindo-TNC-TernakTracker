@@ -45,7 +45,9 @@ function emptyRow(month: string): TargetFormRow {
     tiktokAccountId: "",
     month,
     targetVideos: 0,
-    incentivePerVideo: 0,
+    incentivePercent: 31,
+    tncSharingPercent: 54,
+    hndSharingPercent: 15,
     basePay: defaultBasePayPreset(),
   };
 }
@@ -56,8 +58,13 @@ function validateRow(row: TargetFormRow): string | null {
   if (!row.tiktokAccountId) return "Each row needs a TikTok account.";
   if (!row.month) return "Each row needs a month.";
   if (row.targetVideos < 0) return "Target videos must be 0 or more.";
-  if (row.incentivePerVideo < 0)
-    return "Incentive per video must be 0 or more.";
+  const pct = (n: number) => Number.isFinite(n) && n >= 1 && n <= 100;
+  if (!pct(row.incentivePercent))
+    return "Incentive harus persentase 1–100.";
+  if (!pct(row.tncSharingPercent))
+    return "TNC sharing harus persentase 1–100.";
+  if (!pct(row.hndSharingPercent))
+    return "HND sharing harus persentase 1–100.";
   if (!basePayAllowed.has(row.basePay)) {
     const opts = BASE_PAY_PRESET_VALUES.map(formatBasePayLabel).join(" atau ");
     return `Base pay harus salah satu: ${opts}.`;

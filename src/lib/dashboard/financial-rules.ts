@@ -17,3 +17,21 @@ export const FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE = 0.54;
  * tetap di `syncDerivedFinancials`; ER & incentives kolom tetap dari sana.
  */
 export const HANINDO_SHARING_RATE_ON_TARGET_REVENUE = 0.15;
+
+/**
+ * Alokasi perf table (model lama / baris tanpa % tersimpan): [HND] = rate × ER,
+ * [TNC] = ER − incentives − [HND].
+ */
+export function splitErForTncHndColumns(
+  expectedRevenue: number,
+  incentives: number,
+  hanindoRate: number = HANINDO_SHARING_RATE_ON_TARGET_REVENUE,
+): { tncExpectedProfit: number; hndExpectedProfit: number } {
+  const r = Math.max(
+    0,
+    Math.min(0.5, Number.isFinite(hanindoRate) ? hanindoRate : 0),
+  );
+  const hndExpectedProfit = r * expectedRevenue;
+  const tncExpectedProfit = expectedRevenue - incentives - hndExpectedProfit;
+  return { tncExpectedProfit, hndExpectedProfit };
+}

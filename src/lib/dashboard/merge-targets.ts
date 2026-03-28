@@ -1,5 +1,8 @@
 import { normalizeBasePayForSync } from "@/lib/dashboard/base-pay-presets";
-import { FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE } from "@/lib/dashboard/financial-rules";
+import {
+  FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE,
+  splitErForTncHndColumns,
+} from "@/lib/dashboard/financial-rules";
 import { filterPlausibleVideoUrls } from "@/lib/dashboard/video-urls";
 import type { CreatorTarget, TargetFormRow } from "@/lib/types";
 import {
@@ -7,12 +10,40 @@ import {
   normalizeTargetTableSegmentForKey,
 } from "@/lib/types";
 
+const SHARING_PCT_THRESHOLD = 1;
+
+function clampStoredPercent(n: number): number {
+  return Math.min(100, Math.max(0, Math.round(Number(n) * 10) / 10));
+}
+
+/** Baris memakai nominal = expectedRevenue × (% / 100), ER = target × base pay. */
+export function usesSharingPercentModel(
+  t: Pick<
+    CreatorTarget,
+    "incentivePercent" | "tncSharingPercent" | "hndSharingPercent"
+  >,
+): boolean {
+  const a = Number(t.incentivePercent) || 0;
+  const b = Number(t.tncSharingPercent) || 0;
+  const c = Number(t.hndSharingPercent) || 0;
+  return (
+    a >= SHARING_PCT_THRESHOLD &&
+    b >= SHARING_PCT_THRESHOLD &&
+    c >= SHARING_PCT_THRESHOLD
+  );
+}
+
+function clampSubmitPercent(n: number): number {
+  return Math.min(100, Math.max(1, Math.round(Number(n)) || 0));
+}
+
 /**
  * Single source of truth: expected revenue & incentives dari leaf target,
  * bukan kolom tersimpan yang bisa stale (seed lama / upsert parsial).
  *
  * - expected revenue = targetVideos × basePay
- * - incentives (total ke creator) = targetVideos × incentivePerVideo
+ * - Model %: incentives / TNC / HND = expectedRevenue × (pct/100) jika ketiga pct ≥ 1
+ * - Model lama: incentives = targetVideos × incentivePerVideo; TNC/HND dihitung di agregasi
  * - expected profit: basis revenue = expected revenue; segmen meja FOLO Public memakai
  *   porsi {@link FOLO_TARGET_EXPECTED_PROFIT_REVENUE_SHARE} sebelum kurangi insentif & reimb.
  */
@@ -21,7 +52,31 @@ export function syncDerivedFinancials(t: CreatorTarget): CreatorTarget {
   const bp = normalizeBasePayForSync(t.basePay);
   const ipv = Math.max(0, Math.floor(Number(t.incentivePerVideo)) || 0);
   const expectedRevenue = tv * bp;
-  const incentives = tv * ipv;
+  /** Dasar bagi persentase: expected revenue baris (target × base pay). */
+  const pctBase = expectedRevenue;
+
+  const incPct = clampStoredPercent(t.incentivePercent ?? 0);
+  const tncPct = clampStoredPercent(t.tncSharingPercent ?? 0);
+  const hndPct = clampStoredPercent(t.hndSharingPercent ?? 0);
+  const usePct =
+    incPct >= SHARING_PCT_THRESHOLD &&
+    tncPct >= SHARING_PCT_THRESHOLD &&
+    hndPct >= SHARING_PCT_THRESHOLD;
+
+  let incentives: number;
+  let tncSharingAmount: number;
+  let hndSharingAmount: number;
+
+  if (usePct) {
+    incentives = (pctBase * incPct) / 100;
+    tncSharingAmount = (pctBase * tncPct) / 100;
+    hndSharingAmount = (pctBase * hndPct) / 100;
+  } else {
+    incentives = tv * ipv;
+    tncSharingAmount = 0;
+    hndSharingAmount = 0;
+  }
+
   const seg = normalizeTargetTableSegmentForKey(t.tableSegmentId);
   const profitRevenueBase =
     seg === "folo"
@@ -43,11 +98,20 @@ export function syncDerivedFinancials(t: CreatorTarget): CreatorTarget {
     ...t,
     targetVideos: tv,
     basePay: bp,
-    incentivePerVideo: ipv,
+    incentivePerVideo: usePct ? 0 : ipv,
+    incentivePercent: usePct ? incPct : clampStoredPercent(t.incentivePercent ?? 0),
+    tncSharingPercent: usePct
+      ? tncPct
+      : clampStoredPercent(t.tncSharingPercent ?? 0),
+    hndSharingPercent: usePct
+      ? hndPct
+      : clampStoredPercent(t.hndSharingPercent ?? 0),
+    incentives,
+    tncSharingAmount,
+    hndSharingAmount,
     submittedVideos,
     submittedVideoUrls: urlList,
     expectedRevenue,
-    incentives,
     expectedProfit,
     actualRevenue,
     actualProfit,
@@ -63,7 +127,9 @@ export interface CreatorTargetRowEditPayload {
   targetVideos: number;
   tableSegmentId: string;
   basePay: number;
-  incentivePerVideo: number;
+  incentivePercent: number;
+  tncSharingPercent: number;
+  hndSharingPercent: number;
 }
 
 export type CreatorTargetRowSave = CreatorTargetRowEditPayload & {
@@ -80,10 +146,10 @@ export function applyTargetRowEdit(
     targetVideos: Math.max(0, Math.floor(Number(edit.targetVideos)) || 0),
     tableSegmentId: normalizeTargetTableSegmentForKey(edit.tableSegmentId),
     basePay: Math.max(0, Number(edit.basePay) || 0),
-    incentivePerVideo: Math.max(
-      0,
-      Math.floor(Number(edit.incentivePerVideo)) || 0,
-    ),
+    incentivePercent: clampSubmitPercent(edit.incentivePercent),
+    tncSharingPercent: clampSubmitPercent(edit.tncSharingPercent),
+    hndSharingPercent: clampSubmitPercent(edit.hndSharingPercent),
+    incentivePerVideo: 0,
   });
 }
 
@@ -191,10 +257,9 @@ export function mergeTargetForms(
     const reimbursements = existing?.reimbursements ?? 0;
 
     const targetVideos = Math.max(0, Math.floor(Number(row.targetVideos)) || 0);
-    const incentivePerVideo = Math.max(
-      0,
-      Math.floor(Number(row.incentivePerVideo)) || 0,
-    );
+    const incentivePercent = clampSubmitPercent(row.incentivePercent);
+    const tncSharingPercent = clampSubmitPercent(row.tncSharingPercent);
+    const hndSharingPercent = clampSubmitPercent(row.hndSharingPercent);
 
     const next: CreatorTarget = syncDerivedFinancials({
       id,
@@ -208,7 +273,12 @@ export function mergeTargetForms(
       targetVideos,
       submittedVideos,
       submittedVideoUrls,
-      incentivePerVideo,
+      incentivePerVideo: 0,
+      incentivePercent,
+      tncSharingPercent,
+      hndSharingPercent,
+      tncSharingAmount: 0,
+      hndSharingAmount: 0,
       basePay: row.basePay,
       expectedRevenue: 0,
       actualRevenue: 0,
@@ -221,4 +291,48 @@ export function mergeTargetForms(
   }
 
   return [...map.values()];
+}
+
+type SharingEditInferInput = Pick<
+  CreatorTarget,
+  | "incentivePercent"
+  | "tncSharingPercent"
+  | "hndSharingPercent"
+  | "targetVideos"
+  | "basePay"
+  | "incentivePerVideo"
+>;
+
+/** Infer % untuk form edit dari baris legacy (incentive_per_video + split Hanindo). */
+export function inferSharingPercentsForEdit(
+  t: SharingEditInferInput,
+  hanindoRateFraction: number,
+): { incentivePercent: number; tncSharingPercent: number; hndSharingPercent: number } {
+  if (usesSharingPercentModel(t)) {
+    return {
+      incentivePercent: Math.round(t.incentivePercent),
+      tncSharingPercent: Math.round(t.tncSharingPercent),
+      hndSharingPercent: Math.round(t.hndSharingPercent),
+    };
+  }
+  const bp = Math.max(0, Number(t.basePay) || 0);
+  const tv = Math.max(0, Math.floor(Number(t.targetVideos)) || 0);
+  const ipv = Math.max(0, Math.floor(Number(t.incentivePerVideo)) || 0);
+  const inc = tv * ipv;
+  const er = tv * bp;
+  if (er <= 0) {
+    return { incentivePercent: 31, tncSharingPercent: 54, hndSharingPercent: 15 };
+  }
+  const { tncExpectedProfit, hndExpectedProfit } = splitErForTncHndColumns(
+    er,
+    inc,
+    hanindoRateFraction,
+  );
+  const toPctOfEr = (nominal: number) =>
+    Math.min(100, Math.max(1, Math.round((nominal / er) * 100)));
+  return {
+    incentivePercent: toPctOfEr(inc),
+    tncSharingPercent: toPctOfEr(tncExpectedProfit),
+    hndSharingPercent: toPctOfEr(hndExpectedProfit),
+  };
 }

@@ -36,7 +36,6 @@ import { useCreatorDashboard } from "@/hooks/useCreatorDashboard";
 import { useFormSettings } from "@/hooks/useFormSettings";
 import {
   logWorkspaceActivity,
-  persistCreatorHanindoSharingPercent,
   syncStoredFormEntitiesToSupabase,
 } from "@/lib/dashboard/supabase-data";
 import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
@@ -196,33 +195,6 @@ function CreatorDashboardInner({
   const mergedTiktok = useMemo(
     () => mergeTikTokAccounts(tiktokAccounts, formSettingsStored.tiktokAccounts),
     [tiktokAccounts, formSettingsStored.tiktokAccounts],
-  );
-
-  const persistHanindoPercent = useCallback(
-    async (creatorId: string, percent: number) => {
-      try {
-        await persistCreatorHanindoSharingPercent(
-          supabaseForm,
-          creatorId,
-          percent,
-        );
-        await reload();
-        void logWorkspaceActivity(supabaseForm, {
-          actorEmail: userEmail,
-          action: "update",
-          entityType: "creator",
-          summary: `Mengubah porsi Hanindo (% [HND]) — creator ${creatorId.slice(0, 8)}… = ${percent}%`,
-          metadata: { creatorId, percent },
-        });
-      } catch (e) {
-        toast.error("Gagal menyimpan % Hanindo", {
-          description:
-            e instanceof Error ? e.message : "Periksa koneksi dan coba lagi.",
-        });
-        throw e;
-      }
-    },
-    [supabaseForm, reload, userEmail],
   );
 
   const handleSaveProject = useCallback(async () => {
@@ -538,7 +510,6 @@ function CreatorDashboardInner({
                   }
                   onOpenSubmitVideosForCreator={openSubmitVideosForCreator}
                   onDeleteCreatorTargets={requestDeleteCreatorTargets}
-                  onPersistHanindoPercent={persistHanindoPercent}
                   onReplaceTargetVideoLinks={handleReplaceTargetVideoLinks}
                   onUpdateCreatorTargetMonth={handleUpdateCreatorTargetMonth}
                   highlightedCreatorId={highlightedCreatorId}

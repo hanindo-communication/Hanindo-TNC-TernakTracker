@@ -19,6 +19,16 @@ const inputClass =
 const rowSelectTriggerClass =
   "h-10 w-full rounded-lg border-white/10 bg-white/[0.04] px-3 text-sm shadow-none hover:border-white/15 focus:border-neon-cyan/55 focus:ring-2 focus:ring-neon-cyan/20";
 
+const DEFAULT_SHARING = {
+  incentivePercent: 31,
+  tncSharingPercent: 54,
+  hndSharingPercent: 15,
+} as const;
+
+function clampPct(n: number): number {
+  return Math.min(100, Math.max(1, Math.round(Number(n)) || 0));
+}
+
 interface TargetRowEditorProps {
   row: TargetFormRow;
   rowIndex: number;
@@ -56,6 +66,9 @@ export function TargetRowEditor({
       creatorType: c?.creatorType ?? row.creatorType,
       tiktokAccountId: firstTt?.id ?? "",
       basePay: c ? defaultBasePay(c.creatorType) : row.basePay,
+      incentivePercent: DEFAULT_SHARING.incentivePercent,
+      tncSharingPercent: DEFAULT_SHARING.tncSharingPercent,
+      hndSharingPercent: DEFAULT_SHARING.hndSharingPercent,
     });
   };
 
@@ -100,6 +113,9 @@ export function TargetRowEditor({
             patch({
               creatorType,
               basePay: defaultBasePay(creatorType),
+              incentivePercent: DEFAULT_SHARING.incentivePercent,
+              tncSharingPercent: DEFAULT_SHARING.tncSharingPercent,
+              hndSharingPercent: DEFAULT_SHARING.hndSharingPercent,
             });
           }}
           options={[...CREATOR_TYPE_SELECT_OPTIONS]}
@@ -146,28 +162,76 @@ export function TargetRowEditor({
         />
       </div>
 
-      <div className="md:col-span-1">
-        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Incentive / vid
-        </label>
-        <OptionalNonNegIntInput
-          className={inputClass}
-          value={row.incentivePerVideo}
-          onCommit={(n) => patch({ incentivePerVideo: n })}
-        />
-      </div>
-
-      <div className="md:col-span-1">
-        <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
-          Base pay
-        </label>
-        <input
-          type="number"
-          min={0}
-          className={inputClass}
-          value={row.basePay}
-          onChange={(e) => patch({ basePay: Number(e.target.value) || 0 })}
-        />
+      <div className="md:col-span-12 grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
+            Base pay
+          </label>
+          <input
+            type="number"
+            min={0}
+            className={inputClass}
+            value={row.basePay}
+            onChange={(e) => patch({ basePay: Number(e.target.value) || 0 })}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
+            Incentive per video{" "}
+            <span className="font-normal text-muted/80">(% dari exp. revenue)</span>
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            className={inputClass}
+            value={row.incentivePercent}
+            onChange={(e) =>
+              patch({
+                incentivePercent: clampPct(Number(e.target.value)),
+              })
+            }
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
+            TNC sharing{" "}
+            <span className="font-normal text-muted/80">(% dari exp. revenue)</span>
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            className={inputClass}
+            value={row.tncSharingPercent}
+            onChange={(e) =>
+              patch({
+                tncSharingPercent: clampPct(Number(e.target.value)),
+              })
+            }
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted">
+            HND sharing{" "}
+            <span className="font-normal text-muted/80">(% dari exp. revenue)</span>
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            className={inputClass}
+            value={row.hndSharingPercent}
+            onChange={(e) =>
+              patch({
+                hndSharingPercent: clampPct(Number(e.target.value)),
+              })
+            }
+          />
+        </div>
       </div>
 
       <div className="md:col-span-12 flex items-center justify-between pt-1">

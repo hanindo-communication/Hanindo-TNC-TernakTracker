@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useCreatorHanindoPercents } from "@/hooks/useCreatorHanindoPercents";
-import { splitErForTncHndColumns } from "@/hooks/useCreatorDashboard";
 import { flushSync } from "react-dom";
 import {
   Dialog,
@@ -18,11 +16,12 @@ import {
   BASE_PAY_PRESET_VALUES,
   formatBasePayLabel,
 } from "@/lib/dashboard/base-pay-presets";
-import type { CreatorTargetRowSave } from "@/lib/dashboard/merge-targets";
+import {
+  type CreatorTargetRowSave,
+} from "@/lib/dashboard/merge-targets";
 import { normalizeTargetTableSegmentForKey } from "@/lib/types";
 import { AppSelect } from "@/components/ui/app-select";
 import { Spinner } from "@/components/ui/spinner";
-import { formatCurrency } from "@/lib/utils";
 
 export interface EditTargetRowSnapshot {
   targetId: string;
@@ -31,14 +30,18 @@ export interface EditTargetRowSnapshot {
   targetVideos: number;
   tableSegmentId: string;
   basePay: number;
-  incentivePerVideo: number;
+  incentivePercent: number;
+  tncSharingPercent: number;
+  hndSharingPercent: number;
 }
 
 type RowValues = {
   targetVideos: number;
   tableSegmentId: string;
   basePay: number;
-  incentivePerVideo: number;
+  incentivePercent: number;
+  tncSharingPercent: number;
+  hndSharingPercent: number;
 };
 
 interface EditCreatorTargetsDialogProps {
@@ -48,13 +51,7 @@ interface EditCreatorTargetsDialogProps {
   creatorName: string;
   rows: EditTargetRowSnapshot[];
   tableSegments: TableSegmentOption[];
-  resolveHanindoPercent: (creatorId: string) => number;
-  onPersistHanindoPercent: (
-    creatorId: string,
-    percent: number,
-  ) => void | Promise<void>;
   onSave: (updates: CreatorTargetRowSave[]) => void | Promise<void>;
-  /** Dipanggil setelah simpan berhasil (termasuk hanya % Hanindo tanpa baris target). */
   onSaveSuccess?: () => void;
 }
 
@@ -64,63 +61,21 @@ const fieldClass =
 const editSelectTriggerClass =
   "h-9 w-full min-w-0 border-white/10 bg-white/[0.04] px-2 text-sm shadow-none hover:border-white/12 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
 
-const clampPct = (n: number) =>
-  Math.min(100, Math.max(0, Math.round(n * 10) / 10));
-
-const MAX_HND_PCT = 50;
-
-type AllocationPctDraft = { inc: number; tnc: number; hnd: number };
-
-function buildAllocationDraftFromRows(
-  snapshotRows: EditTargetRowSnapshot[],
-  hanindoPctSaved: number,
-): AllocationPctDraft {
-  let er = 0;
-  let inc = 0;
-  for (const r of snapshotRows) {
-    const tv = Math.max(0, Math.floor(Number(r.targetVideos)) || 0);
-    const bp = Math.max(0, Number(r.basePay) || 0);
-    const ipv = Math.max(0, Math.floor(Number(r.incentivePerVideo)) || 0);
-    er += tv * bp;
-    inc += tv * ipv;
-  }
-  const hndPctSaved = hanindoPctSaved;
-  const rate = Math.min(MAX_HND_PCT, Math.max(0, hndPctSaved)) / 100;
-  const { hndExpectedProfit } = splitErForTncHndColumns(er, inc, rate);
-  if (er <= 0) {
-    const h = Math.min(MAX_HND_PCT, clampPct(hndPctSaved));
-    return { inc: 0, tnc: clampPct(100 - h), hnd: h };
-  }
-  let incP = clampPct((inc / er) * 100);
-  const hndP = Math.min(
-    MAX_HND_PCT,
-    clampPct((hndExpectedProfit / er) * 100),
-  );
-  incP = Math.min(incP, 100 - hndP);
-  const tncP = clampPct(100 - incP - hndP);
-  return { inc: incP, tnc: tncP, hnd: hndP };
+function clampPctInput(n: number): number {
+  return Math.min(100, Math.max(1, Math.round(Number(n)) || 0));
 }
 
 export function EditCreatorTargetsDialog({
   open,
   onOpenChange,
-  creatorId,
+  creatorId: _creatorId,
   creatorName,
   rows,
   tableSegments,
-  resolveHanindoPercent,
-  onPersistHanindoPercent,
   onSave,
   onSaveSuccess,
 }: EditCreatorTargetsDialogProps) {
-  const { setPercent, defaultPercent } = useCreatorHanindoPercents();
   const [values, setValues] = useState<Record<string, RowValues>>({});
-  const [draftAllocationPct, setDraftAllocationPct] =
-    useState<AllocationPctDraft>({
-      inc: 0,
-      tnc: 0,
-      hnd: defaultPercent,
-    });
   const [saving, setSaving] = useState(false);
 
   const basePayOptions = useMemo(() => [...BASE_PAY_PRESET_VALUES], []);
@@ -137,41 +92,14 @@ export function EditCreatorTargetsDialog({
               r.tableSegmentId,
             ),
             basePay: r.basePay,
-            incentivePerVideo: r.incentivePerVideo,
+            incentivePercent: r.incentivePercent,
+            tncSharingPercent: r.tncSharingPercent,
+            hndSharingPercent: r.hndSharingPercent,
           },
         ]),
       ),
     );
-    if (creatorId) {
-      setDraftAllocationPct(
-        buildAllocationDraftFromRows(rows, resolveHanindoPercent(creatorId)),
-      );
-    }
-  }, [open, rows, creatorId, resolveHanindoPercent]);
-
-  const allocationPreview = useMemo(() => {
-    let er = 0;
-    for (const r of rows) {
-      const v = values[r.targetId];
-      if (!v) continue;
-      const tv = Math.max(0, Math.floor(Number(v.targetVideos)) || 0);
-      const bp = Math.max(0, Number(v.basePay) || 0);
-      er += tv * bp;
-    }
-    const pct = draftAllocationPct;
-    const inc = er > 0 ? (er * pct.inc) / 100 : 0;
-    const tncExpectedProfit = er > 0 ? (er * pct.tnc) / 100 : 0;
-    const hndExpectedProfit = er > 0 ? (er * pct.hnd) / 100 : 0;
-    return {
-      er,
-      inc,
-      tncExpectedProfit,
-      hndExpectedProfit,
-      incPct: pct.inc,
-      tncPct: pct.tnc,
-      hndPctOfEr: pct.hnd,
-    };
-  }, [rows, values, draftAllocationPct]);
+  }, [open, rows]);
 
   const patchRow = (id: string, partial: Partial<RowValues>) => {
     setValues((v) => {
@@ -194,24 +122,19 @@ export function EditCreatorTargetsDialog({
         v.targetVideos !== r.targetVideos ||
         segForm !== segSnap ||
         v.basePay !== r.basePay ||
-        v.incentivePerVideo !== r.incentivePerVideo
+        v.incentivePercent !== r.incentivePercent ||
+        v.tncSharingPercent !== r.tncSharingPercent ||
+        v.hndSharingPercent !== r.hndSharingPercent
       ) {
         updates.push({
           targetId: r.targetId,
           targetVideos: v.targetVideos,
           tableSegmentId: v.tableSegmentId,
           basePay: v.basePay,
-          incentivePerVideo: v.incentivePerVideo,
+          incentivePercent: clampPctInput(v.incentivePercent),
+          tncSharingPercent: clampPctInput(v.tncSharingPercent),
+          hndSharingPercent: clampPctInput(v.hndSharingPercent),
         });
-      }
-    }
-
-    if (creatorId) {
-      setPercent(creatorId, draftAllocationPct.hnd);
-      try {
-        await onPersistHanindoPercent(creatorId, draftAllocationPct.hnd);
-      } catch {
-        return;
       }
     }
 
@@ -243,132 +166,14 @@ export function EditCreatorTargetsDialog({
         <DialogHeader>
           <DialogTitle>Edit target — {creatorName}</DialogTitle>
           <DialogDescription>
-            Ubah meja (Table), jumlah video target, base pay, incentive per video,
-            dan % Hanindo untuk kolom [HND]. Preview memakai identitas{" "}
-            <span className="text-foreground/90">ER = incentives + [TNC] + [HND]</span>.
+            Ubah meja (Table), target, base pay, dan persentase (1–100%): nominal
+            tiap kolom ={" "}
+            <span className="font-medium text-foreground/90">
+              expected revenue
+            </span>{" "}
+            baris (target × base pay) × persen.
           </DialogDescription>
         </DialogHeader>
-
-        {rows.length > 0 && creatorId ? (
-          <div className="space-y-3 rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-3">
-            <div className="space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-                Alokasi vs expected revenue (preview)
-              </p>
-              <p className="text-[10px] text-muted/90">
-                Tiga % di bawah ini selalu berjumlah 100%. Hanya % [HND] yang
-                disimpan ke pengaturan creator; incentives di data target tetap
-                dari kolom per baris.
-              </p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <label className="block space-y-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-                  Incentives (% dari ER)
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={0.1}
-                  value={draftAllocationPct.inc}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (!Number.isFinite(n)) return;
-                    setDraftAllocationPct((p) => {
-                      const inc = Math.min(clampPct(n), 100 - p.hnd);
-                      const tnc = clampPct(100 - inc - p.hnd);
-                      return { inc, tnc, hnd: p.hnd };
-                    });
-                  }}
-                  disabled={saving}
-                  className={fieldClass}
-                  aria-label="Persentase incentives dari expected revenue"
-                />
-              </label>
-              <label className="block space-y-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-neon-cyan/90">
-                  [TNC] (% dari ER)
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={0.1}
-                  value={draftAllocationPct.tnc}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (!Number.isFinite(n)) return;
-                    setDraftAllocationPct((p) => {
-                      let tnc = Math.min(clampPct(n), 100 - p.inc);
-                      let hnd = clampPct(100 - p.inc - tnc);
-                      if (hnd > MAX_HND_PCT) {
-                        hnd = MAX_HND_PCT;
-                        tnc = clampPct(100 - p.inc - hnd);
-                      }
-                      return { inc: p.inc, tnc, hnd };
-                    });
-                  }}
-                  disabled={saving}
-                  className={fieldClass}
-                  aria-label="Persentase TNC dari expected revenue"
-                />
-              </label>
-              <label className="block space-y-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-neon-purple/90">
-                  [HND] Hanindo (% dari ER)
-                </span>
-                <input
-                  type="number"
-                  min={0}
-                  max={MAX_HND_PCT}
-                  step={0.1}
-                  value={draftAllocationPct.hnd}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (!Number.isFinite(n)) return;
-                    setDraftAllocationPct((p) => {
-                      const hnd = Math.min(
-                        clampPct(n),
-                        MAX_HND_PCT,
-                        100 - p.inc,
-                      );
-                      const tnc = clampPct(100 - p.inc - hnd);
-                      return { inc: p.inc, tnc, hnd };
-                    });
-                  }}
-                  disabled={saving}
-                  className={fieldClass}
-                  aria-label="Persentase Hanindo dari expected revenue"
-                />
-              </label>
-            </div>
-            <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1.5 text-xs tabular-nums">
-              <dt className="text-muted">Expected revenue</dt>
-              <dd className="text-right font-medium text-foreground">
-                {formatCurrency(allocationPreview.er)}
-              </dd>
-              <dt className="text-muted">
-                Incentives ({allocationPreview.incPct.toFixed(1)}% ER)
-              </dt>
-              <dd className="text-right text-foreground/90">
-                {formatCurrency(allocationPreview.inc)}
-              </dd>
-              <dt className="text-neon-cyan/90">
-                [TNC] ({allocationPreview.tncPct.toFixed(1)}% ER)
-              </dt>
-              <dd className="text-right text-neon-cyan/90">
-                {formatCurrency(allocationPreview.tncExpectedProfit)}
-              </dd>
-              <dt className="text-neon-purple/90">
-                [HND] ({allocationPreview.hndPctOfEr.toFixed(1)}% ER)
-              </dt>
-              <dd className="text-right text-neon-purple/90">
-                {formatCurrency(allocationPreview.hndExpectedProfit)}
-              </dd>
-            </dl>
-          </div>
-        ) : null}
 
         {rows.length === 0 ? (
           <p className="text-sm text-muted">
@@ -413,6 +218,24 @@ export function EditCreatorTargetsDialog({
                     </label>
                     <label className="block space-y-1.5">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                        Target videos
+                      </span>
+                      <OptionalNonNegIntInput
+                        className={fieldClass}
+                        value={v.targetVideos}
+                        onLiveUpdate={(n) =>
+                          patchRow(r.targetId, { targetVideos: n })
+                        }
+                        onCommit={(n) =>
+                          flushSync(() =>
+                            patchRow(r.targetId, { targetVideos: n }),
+                          )
+                        }
+                        aria-label={`Target videos untuk ${r.projectName}`}
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
                         Base pay
                       </span>
                       <AppSelect
@@ -431,40 +254,70 @@ export function EditCreatorTargetsDialog({
                         }))}
                       />
                     </label>
-                    <label className="block space-y-1.5 sm:col-span-1">
+                    <label className="block space-y-1.5">
                       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-                        Target videos
+                        Incentive per video (% dari exp. revenue)
                       </span>
-                      <OptionalNonNegIntInput
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        step={1}
                         className={fieldClass}
-                        value={v.targetVideos}
-                        onLiveUpdate={(n) =>
-                          patchRow(r.targetId, { targetVideos: n })
-                        }
-                        onCommit={(n) =>
-                          flushSync(() =>
-                            patchRow(r.targetId, { targetVideos: n }),
-                          )
-                        }
-                        aria-label={`Target videos untuk ${r.projectName}`}
+                        value={v.incentivePercent}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (!Number.isFinite(n)) return;
+                          patchRow(r.targetId, {
+                            incentivePercent: clampPctInput(n),
+                          });
+                        }}
+                        disabled={saving}
+                        aria-label={`Incentive % untuk ${r.projectName}`}
                       />
                     </label>
-                    <label className="block space-y-1.5 sm:col-span-1">
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-                        Incentive / video
+                    <label className="block space-y-1.5">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-neon-cyan/90">
+                        TNC sharing (% dari exp. revenue)
                       </span>
-                      <OptionalNonNegIntInput
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        step={1}
                         className={fieldClass}
-                        value={v.incentivePerVideo}
-                        onLiveUpdate={(n) =>
-                          patchRow(r.targetId, { incentivePerVideo: n })
-                        }
-                        onCommit={(n) =>
-                          flushSync(() =>
-                            patchRow(r.targetId, { incentivePerVideo: n }),
-                          )
-                        }
-                        aria-label={`Incentive per video untuk ${r.projectName}`}
+                        value={v.tncSharingPercent}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (!Number.isFinite(n)) return;
+                          patchRow(r.targetId, {
+                            tncSharingPercent: clampPctInput(n),
+                          });
+                        }}
+                        disabled={saving}
+                        aria-label={`TNC sharing % untuk ${r.projectName}`}
+                      />
+                    </label>
+                    <label className="block space-y-1.5 sm:col-span-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-neon-purple/90">
+                        HND sharing (% dari exp. revenue)
+                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        step={1}
+                        className={fieldClass}
+                        value={v.hndSharingPercent}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          if (!Number.isFinite(n)) return;
+                          patchRow(r.targetId, {
+                            hndSharingPercent: clampPctInput(n),
+                          });
+                        }}
+                        disabled={saving}
+                        aria-label={`HND sharing % untuk ${r.projectName}`}
                       />
                     </label>
                   </div>
