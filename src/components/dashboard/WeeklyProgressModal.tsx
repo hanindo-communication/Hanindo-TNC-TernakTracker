@@ -6,8 +6,10 @@ import {
   Check,
   Copy,
   GripVertical,
+  Loader2,
   PencilLine,
   Plus,
+  Save,
   Trash2,
   X,
 } from "lucide-react";
@@ -314,6 +316,7 @@ export function WeeklyProgressModal({
   const [draft, setDraft] = useState<WeeklyProgressRow>({ ...EMPTY_DRAFT });
   const [dragRowId, setDragRowId] = useState<string | null>(null);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -384,6 +387,51 @@ export function WeeklyProgressModal({
     [monthKey, supabase],
   );
 
+  const handleSaveAll = useCallback(async () => {
+    const next: WeeklyProgressRow[] =
+      editingId !== null
+        ? rows.map((r) =>
+            r.id === editingId
+              ? { ...draft, id: r.id, weekIndex: r.weekIndex }
+              : r,
+          )
+        : rows;
+
+    setRows(next);
+    try {
+      window.localStorage.setItem(
+        storageKeyV2(monthKey),
+        JSON.stringify({ version: 2, rows: next }),
+      );
+    } catch {
+      /* ignore */
+    }
+
+    if (editingId !== null) {
+      setEditingId(null);
+      setDraft({ ...EMPTY_DRAFT });
+    }
+
+    if (supabase) {
+      setSavingAll(true);
+      try {
+        await persistWeeklyProgressDocument(supabase, monthKey, {
+          version: 2,
+          rows: next,
+        });
+        toast.success("Weekly progress tersimpan ke cloud");
+      } catch (e) {
+        toast.error("Gagal menyimpan weekly progress ke cloud", {
+          description: formatSupabaseClientError(e),
+        });
+      } finally {
+        setSavingAll(false);
+      }
+    } else {
+      toast.success("Progress disimpan di peramban");
+    }
+  }, [rows, editingId, draft, monthKey, supabase]);
+
   const rowsByWeek = useMemo(() => {
     const m = new Map<number, WeeklyProgressRow[]>();
     for (let w = 0; w < WEEKS; w++) m.set(w, []);
@@ -448,25 +496,50 @@ export function WeeklyProgressModal({
         className="flex max-h-[min(92vh,900px)] min-h-0 max-w-[min(100vw-1.5rem,80rem)] flex-col gap-0 overflow-hidden border-neon-cyan/20 p-0 sm:rounded-2xl"
         showClose
       >
-        <DialogHeader className="shrink-0 space-y-1 border-b border-white/[0.07] px-5 py-4 pr-14">
-          <DialogTitle className="text-lg font-semibold text-foreground">
-            Weekly progress
-            <span className="ml-2 text-base font-normal text-muted">
-              · {monthLabel}
-            </span>
-          </DialogTitle>
-          <DialogDescription className="text-sm text-muted">
-            <span className="font-medium text-foreground/85">{monthLabel}</span>
-            {" — "}
-            Empat minggu mengikuti tanggal dalam bulan (WIB). Tiap minggu
-            dimulai dengan satu baris; tambah baris bila beberapa creator /
-            campaign. Data{" "}
-            <strong className="font-semibold text-foreground/90">
-              hanya untuk bulan ini
-            </strong>
-            . Edit per baris lalu Konfirmasi atau Batal. Urutan dalam minggu sama
-            bisa diubah dengan menyeret ikon grip di kiri baris.
-          </DialogDescription>
+        <DialogHeader className="shrink-0 border-b border-white/[0.07] px-5 py-4 pr-14">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <div className="min-w-0 space-y-1">
+              <DialogTitle className="text-lg font-semibold text-foreground">
+                Weekly progress
+                <span className="ml-2 text-base font-normal text-muted">
+                  · {monthLabel}
+                </span>
+              </DialogTitle>
+              <DialogDescription className="text-sm text-muted">
+                <span className="font-medium text-foreground/85">
+                  {monthLabel}
+                </span>
+                {" — "}
+                Empat minggu mengikuti tanggal dalam bulan (WIB). Tiap minggu
+                dimulai dengan satu baris; tambah baris bila beberapa creator /
+                campaign. Data{" "}
+                <strong className="font-semibold text-foreground/90">
+                  hanya untuk bulan ini
+                </strong>
+                . Edit per baris lalu Konfirmasi atau Batal, atau tekan{" "}
+                <strong className="font-semibold text-foreground/90">
+                  Simpan
+                </strong>{" "}
+                untuk menyimpan semua sekaligus (termasuk baris yang sedang
+                diedit) ke peramban
+                {supabase ? " dan ke cloud" : ""}. Urutan dalam minggu sama bisa
+                diubah dengan menyeret ikon grip di kiri baris.
+              </DialogDescription>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleSaveAll()}
+              disabled={savingAll}
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 self-start rounded-lg border border-emerald-400/45 bg-emerald-500/20 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:pointer-events-none disabled:opacity-60"
+            >
+              {savingAll ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+              ) : (
+                <Save className="h-4 w-4 shrink-0" aria-hidden />
+              )}
+              {savingAll ? "Menyimpan…" : "Simpan"}
+            </button>
+          </div>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-5 sm:py-4">
@@ -833,8 +906,8 @@ export function WeeklyProgressModal({
             {supabase ? (
               <>
                 {" "}
-                dan disinkron ke Supabase saat Anda mengubah data (cloud
-                mengalahkan cache peramban saat modal dibuka).
+                dan ke Supabase saat data berubah atau saat Anda menekan Simpan
+                (cloud mengalahkan cache peramban saat modal dibuka).
               </>
             ) : null}
             . Data lama format v1 otomatis dimigrasi sekali buka.
