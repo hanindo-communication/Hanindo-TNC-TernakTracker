@@ -768,7 +768,7 @@ export async function fetchWeeklyProgressDocument(
       .eq("month_key", monthKey)
       .maybeSingle();
     if (error) throw error;
-    if (!data || !Array.isArray(data.rows) || data.rows.length === 0) {
+    if (!data || !Array.isArray(data.rows)) {
       return null;
     }
     return JSON.stringify({

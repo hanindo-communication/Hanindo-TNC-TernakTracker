@@ -114,6 +114,7 @@ export function formatSupabaseClientError(e: unknown): string {
     return [
       "Tabel weekly_progress (simpan Weekly progress ke cloud) belum ada atau belum ter-cache.",
       "Supabase → SQL Editor: jalankan supabase/migrations/011_weekly_progress.sql atau supabase/manual/apply_migration_011_weekly_progress.sql (sudah berisi NOTIFY reload schema).",
+      "Agar satu tim melihat data yang sama: setelah 011, jalankan juga supabase/migrations/012_weekly_progress_shared_workspace.sql (workspace bersama + RLS).",
       "Detail: cursor-docs/supabase-setup.md.",
     ].join(" ");
   }

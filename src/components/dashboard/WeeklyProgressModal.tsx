@@ -143,7 +143,10 @@ function parseV2(raw: string | null): WeeklyProgressRow[] | null {
     const data = JSON.parse(raw) as unknown;
     if (!data || typeof data !== "object" || !("rows" in data)) return null;
     const rows = (data as { rows: unknown }).rows;
-    if (!Array.isArray(rows) || rows.length === 0) return null;
+    if (!Array.isArray(rows)) return null;
+    if (rows.length === 0) {
+      return ensureWeekCoverage([]);
+    }
     const out: WeeklyProgressRow[] = [];
     for (const r of rows) {
       const o = r as Record<string, unknown>;
@@ -301,7 +304,7 @@ interface WeeklyProgressModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   monthKey: string;
-  /** Bila diisi, data dimuat/disimpan ke Supabase (RLS per user) selain localStorage. */
+  /** Bila diisi, data dimuat/disimpan ke Supabase (workspace bersama) selain localStorage. */
   supabase?: SupabaseClient | null;
 }
 
@@ -317,6 +320,16 @@ export function WeeklyProgressModal({
   const [dragRowId, setDragRowId] = useState<string | null>(null);
   const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
   const [savingAll, setSavingAll] = useState(false);
+  const [cloudFetchError, setCloudFetchError] = useState<string | null>(null);
+  /** null = belum selesai fetch; false = tidak ada baris di Supabase untuk bulan ini; true = ada dokumen cloud */
+  const [hasRemoteRow, setHasRemoteRow] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setHasRemoteRow(null);
+      setCloudFetchError(null);
+    }
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -324,6 +337,8 @@ export function WeeklyProgressModal({
     setDraft({ ...EMPTY_DRAFT });
     setDragRowId(null);
     setDragOverRowId(null);
+    setCloudFetchError(null);
+    setHasRemoteRow(null);
 
     if (supabase) {
       let cancelled = false;
@@ -331,6 +346,7 @@ export function WeeklyProgressModal({
         try {
           const doc = await fetchWeeklyProgressDocument(supabase, monthKey);
           if (cancelled) return;
+          setHasRemoteRow(doc !== null);
           const parsed = doc ? parseV2(doc) : null;
           if (parsed) {
             setRows(parsed);
@@ -345,12 +361,17 @@ export function WeeklyProgressModal({
             return;
           }
         } catch (e) {
+          const msg = formatSupabaseClientError(e);
+          setCloudFetchError(msg);
           if (process.env.NODE_ENV === "development") {
             console.warn(
               "[WeeklyProgress] fetch remote",
               supabaseErrorDebugPayload(e),
             );
           }
+          toast.error("Gagal memuat weekly progress dari cloud", {
+            description: msg,
+          });
         }
         if (!cancelled) setRows(loadRowsFromStorage(monthKey));
       })();
@@ -359,6 +380,7 @@ export function WeeklyProgressModal({
       };
     }
 
+    setHasRemoteRow(null);
     setRows(loadRowsFromStorage(monthKey));
   }, [open, monthKey, supabase]);
 
@@ -540,6 +562,41 @@ export function WeeklyProgressModal({
               {supabase ? " dan ke cloud" : ""}. Urutan dalam minggu sama bisa
               diubah dengan menyeret ikon grip di kiri baris.
             </DialogDescription>
+            {cloudFetchError ? (
+              <div
+                role="alert"
+                className="mt-3 rounded-lg border border-red-400/35 bg-red-500/15 px-3 py-2 text-sm text-red-100"
+              >
+                <span className="font-semibold">Cloud tidak bisa dimuat.</span>{" "}
+                {cloudFetchError} Pastikan migrasi database untuk weekly
+                progress sudah dijalankan (
+                <code className="rounded bg-black/30 px-1 py-0.5 text-xs">
+                  supabase/migrations/012_weekly_progress_shared_workspace.sql
+                </code>
+                ).
+              </div>
+            ) : null}
+            {supabase &&
+            hasRemoteRow === false &&
+            !cloudFetchError ? (
+              <div
+                role="status"
+                className="mt-3 rounded-lg border border-amber-400/35 bg-amber-500/12 px-3 py-2 text-sm text-amber-50"
+              >
+                <span className="font-semibold text-amber-100">
+                  Belum ada data weekly progress di Supabase untuk bulan ini.
+                </span>{" "}
+                Yang tampil sekarang dari peramban perangkat ini saja. Agar
+                semua orang melihat isian yang sama: admin jalankan SQL{" "}
+                <code className="rounded bg-black/30 px-1 py-0.5 text-xs">
+                  012_weekly_progress_shared_workspace.sql
+                </code>{" "}
+                di project Supabase (sekali), deploy app terbaru, lalu dari
+                komputer yang punya isian lama tekan{" "}
+                <strong className="font-semibold text-amber-100">Simpan</strong>{" "}
+                di sini supaya data naik ke cloud.
+              </div>
+            ) : null}
           </div>
         </DialogHeader>
 
