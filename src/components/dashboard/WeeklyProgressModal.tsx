@@ -9,6 +9,7 @@ import {
   Loader2,
   PencilLine,
   Plus,
+  RefreshCw,
   Save,
   Trash2,
   X,
@@ -166,7 +167,7 @@ function parseV2(raw: string | null): WeeklyProgressRow[] | null {
         submittedVideo: String(o.submittedVideo ?? ""),
       });
     }
-    return out.length ? ensureWeekCoverage(out) : null;
+    return ensureWeekCoverage(out);
   } catch {
     return null;
   }
@@ -323,13 +324,56 @@ export function WeeklyProgressModal({
   const [cloudFetchError, setCloudFetchError] = useState<string | null>(null);
   /** null = belum selesai fetch; false = tidak ada baris di Supabase untuk bulan ini; true = ada dokumen cloud */
   const [hasRemoteRow, setHasRemoteRow] = useState<boolean | null>(null);
+  /** Sampai selesai fetch pertama dari Supabase — hindari flash baris default / localStorage lawas */
+  const [cloudHydrating, setCloudHydrating] = useState(false);
+  const [syncingFromCloud, setSyncingFromCloud] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setHasRemoteRow(null);
       setCloudFetchError(null);
+      setCloudHydrating(false);
     }
   }, [open]);
+
+  const mirrorRowsToLocalStorage = useCallback((next: WeeklyProgressRow[]) => {
+    try {
+      window.localStorage.setItem(
+        storageKeyV2(monthKey),
+        JSON.stringify({ version: 2, rows: next }),
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [monthKey]);
+
+  const handleSyncFromCloud = useCallback(async () => {
+    if (!supabase) return;
+    setSyncingFromCloud(true);
+    try {
+      const doc = await fetchWeeklyProgressDocument(supabase, monthKey);
+      setHasRemoteRow(doc !== null);
+      const parsed = doc ? parseV2(doc) : null;
+      if (parsed) {
+        setRows(parsed);
+        mirrorRowsToLocalStorage(parsed);
+        toast.success("Disinkronkan dari cloud", {
+          description: "Tabel memakai data terbaru untuk semua yang login.",
+        });
+        return;
+      }
+      if (doc !== null && !parsed) {
+        toast.error("Data cloud tidak bisa dibaca (format tidak dikenali).");
+        return;
+      }
+      toast.message("Belum ada dokumen weekly progress di cloud untuk bulan ini.");
+    } catch (e) {
+      const msg = formatSupabaseClientError(e);
+      toast.error("Gagal sinkron dari cloud", { description: msg });
+    } finally {
+      setSyncingFromCloud(false);
+    }
+  }, [supabase, monthKey, mirrorRowsToLocalStorage]);
 
   useEffect(() => {
     if (!open) return;
@@ -342,6 +386,7 @@ export function WeeklyProgressModal({
 
     if (supabase) {
       let cancelled = false;
+      setCloudHydrating(true);
       void (async () => {
         try {
           const doc = await fetchWeeklyProgressDocument(supabase, monthKey);
@@ -350,14 +395,14 @@ export function WeeklyProgressModal({
           const parsed = doc ? parseV2(doc) : null;
           if (parsed) {
             setRows(parsed);
-            try {
-              window.localStorage.setItem(
-                storageKeyV2(monthKey),
-                JSON.stringify({ version: 2, rows: parsed }),
-              );
-            } catch {
-              /* ignore */
-            }
+            mirrorRowsToLocalStorage(parsed);
+            return;
+          }
+          if (doc !== null && !parsed) {
+            toast.error(
+              "Weekly progress di cloud rusak atau tidak dikenali. Data peramban tidak dipakai agar tidak tertukar.",
+            );
+            setRows(defaultRows());
             return;
           }
         } catch (e) {
@@ -372,29 +417,27 @@ export function WeeklyProgressModal({
           toast.error("Gagal memuat weekly progress dari cloud", {
             description: msg,
           });
+          if (!cancelled) setRows(loadRowsFromStorage(monthKey));
+          return;
         }
         if (!cancelled) setRows(loadRowsFromStorage(monthKey));
-      })();
+      })().finally(() => {
+        if (!cancelled) setCloudHydrating(false);
+      });
       return () => {
         cancelled = true;
       };
     }
 
     setHasRemoteRow(null);
+    setCloudHydrating(false);
     setRows(loadRowsFromStorage(monthKey));
-  }, [open, monthKey, supabase]);
+  }, [open, monthKey, supabase, mirrorRowsToLocalStorage]);
 
   const persist = useCallback(
     (next: WeeklyProgressRow[]) => {
       setRows(next);
-      try {
-        window.localStorage.setItem(
-          storageKeyV2(monthKey),
-          JSON.stringify({ version: 2, rows: next }),
-        );
-      } catch {
-        /* ignore */
-      }
+      mirrorRowsToLocalStorage(next);
       if (supabase) {
         void persistWeeklyProgressDocument(supabase, monthKey, {
           version: 2,
@@ -406,7 +449,7 @@ export function WeeklyProgressModal({
         });
       }
     },
-    [monthKey, supabase],
+    [monthKey, supabase, mirrorRowsToLocalStorage],
   );
 
   const handleSaveAll = useCallback(async () => {
@@ -420,14 +463,7 @@ export function WeeklyProgressModal({
         : rows;
 
     setRows(next);
-    try {
-      window.localStorage.setItem(
-        storageKeyV2(monthKey),
-        JSON.stringify({ version: 2, rows: next }),
-      );
-    } catch {
-      /* ignore */
-    }
+    mirrorRowsToLocalStorage(next);
 
     if (editingId !== null) {
       setEditingId(null);
@@ -452,7 +488,7 @@ export function WeeklyProgressModal({
     } else {
       toast.success("Progress disimpan di peramban");
     }
-  }, [rows, editingId, draft, monthKey, supabase]);
+  }, [rows, editingId, draft, monthKey, supabase, mirrorRowsToLocalStorage]);
 
   const rowsByWeek = useMemo(() => {
     const m = new Map<number, WeeklyProgressRow[]>();
@@ -527,24 +563,49 @@ export function WeeklyProgressModal({
                   · {monthLabel}
                 </span>
               </DialogTitle>
-              <button
-                type="button"
-                onClick={() => void handleSaveAll()}
-                disabled={savingAll}
-                className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-400/45 bg-emerald-500/20 px-3 text-sm font-semibold text-emerald-100 shadow-sm transition hover:bg-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:pointer-events-none disabled:opacity-60 sm:px-4"
-              >
-                {savingAll ? (
-                  <Loader2
-                    className="h-4 w-4 shrink-0 animate-spin"
-                    aria-hidden
-                  />
-                ) : (
-                  <Save className="h-4 w-4 shrink-0" aria-hidden />
-                )}
-                <span className="whitespace-nowrap">
-                  {savingAll ? "Menyimpan…" : "Simpan"}
-                </span>
-              </button>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {supabase ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleSyncFromCloud()}
+                    disabled={
+                      cloudHydrating || syncingFromCloud || savingAll
+                    }
+                    title="Ambil ulang data terbaru dari Supabase (sama untuk semua tim)"
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/15 bg-white/[0.06] px-3 text-sm font-semibold text-foreground/90 transition hover:bg-white/[0.1] focus:outline-none focus:ring-2 focus:ring-neon-cyan/35 disabled:pointer-events-none disabled:opacity-50 sm:px-4"
+                  >
+                    {syncingFromCloud ? (
+                      <Loader2
+                        className="h-4 w-4 shrink-0 animate-spin"
+                        aria-hidden
+                      />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+                    )}
+                    <span className="whitespace-nowrap">
+                      {syncingFromCloud ? "Sinkron…" : "Sinkronkan"}
+                    </span>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void handleSaveAll()}
+                  disabled={savingAll || cloudHydrating}
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-400/45 bg-emerald-500/20 px-3 text-sm font-semibold text-emerald-100 shadow-sm transition hover:bg-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:pointer-events-none disabled:opacity-60 sm:px-4"
+                >
+                  {savingAll ? (
+                    <Loader2
+                      className="h-4 w-4 shrink-0 animate-spin"
+                      aria-hidden
+                    />
+                  ) : (
+                    <Save className="h-4 w-4 shrink-0" aria-hidden />
+                  )}
+                  <span className="whitespace-nowrap">
+                    {savingAll ? "Menyimpan…" : "Simpan"}
+                  </span>
+                </button>
+              </div>
             </div>
             <DialogDescription className="text-sm text-muted">
               <span className="font-medium text-foreground/85">{monthLabel}</span>
@@ -559,8 +620,12 @@ export function WeeklyProgressModal({
               <strong className="font-semibold text-foreground/90">Simpan</strong>{" "}
               di atas untuk menyimpan semua sekaligus (termasuk baris yang sedang
               diedit) ke peramban
-              {supabase ? " dan ke cloud" : ""}. Urutan dalam minggu sama bisa
-              diubah dengan menyeret ikon grip di kiri baris.
+              {supabase ? " dan ke cloud" : ""}.
+              {supabase
+                ? " Tombol Sinkronkan mengambil versi terbaru dari cloud ke perangkat ini."
+                : ""}{" "}
+              Urutan dalam minggu sama bisa diubah dengan menyeret ikon grip di
+              kiri baris.
             </DialogDescription>
             {cloudFetchError ? (
               <div
@@ -600,7 +665,20 @@ export function WeeklyProgressModal({
           </div>
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-5 sm:py-4">
+        <div className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-5 sm:py-4">
+          {cloudHydrating && supabase ? (
+            <div
+              className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background/80 px-4 text-center backdrop-blur-[2px]"
+              aria-busy
+              aria-label="Memuat data dari cloud"
+            >
+              <Loader2 className="h-9 w-9 shrink-0 animate-spin text-neon-cyan" />
+              <p className="max-w-sm text-sm text-muted">
+                Memuat data bersama dari cloud… Tabel akan menampilkan isian
+                yang sama untuk semua orang yang login.
+              </p>
+            </div>
+          ) : null}
           <div className="flex flex-col gap-8">
             {Array.from({ length: WEEKS }, (_, w) => {
               const weekRows = rowsByWeek.get(w) ?? [];
