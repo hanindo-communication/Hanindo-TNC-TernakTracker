@@ -764,6 +764,7 @@ export async function fetchWeeklyProgressDocument(
     const { data, error } = await supabase
       .from("weekly_progress")
       .select("version, rows")
+      .eq("user_id", SHARED_DASHBOARD_USER_ID)
       .eq("month_key", monthKey)
       .maybeSingle();
     if (error) throw error;
@@ -785,12 +786,11 @@ export async function persistWeeklyProgressDocument(
   return withPostgrestSchemaRetry(supabase, async () => {
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr) throw authErr;
-    const uid = auth.user?.id;
-    if (!uid) throw new Error("Sesi tidak valid (belum masuk).");
+    if (!auth.user?.id) throw new Error("Sesi tidak valid (belum masuk).");
 
     const { error } = await supabase.from("weekly_progress").upsert(
       {
-        user_id: uid,
+        user_id: SHARED_DASHBOARD_USER_ID,
         month_key: monthKey,
         version: document.version,
         rows: document.rows,
