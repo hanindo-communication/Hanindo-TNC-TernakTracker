@@ -89,7 +89,7 @@ export function SubmitVideosModal({
   tableSegments,
   onSubmitVideos,
 }: SubmitVideosModalProps) {
-  const { stored: formEntities } = useFormSettings();
+  const { stored: formEntities } = useFormSettings(selectedMonth);
 
   const creators = useMemo(
     () => mergeCreators(creatorsWorkspace, formEntities.creators),

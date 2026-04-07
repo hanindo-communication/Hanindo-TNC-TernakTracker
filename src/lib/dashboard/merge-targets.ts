@@ -130,6 +130,10 @@ export interface CreatorTargetRowEditPayload {
   incentivePercent: number;
   tncSharingPercent: number;
   hndSharingPercent: number;
+  /** Jika diisi, mengganti `project_id` baris (campaign dari Data settings). */
+  projectId?: string;
+  /** 0–3 = Week 1–4 weekly progress; null = hapus assignment. */
+  progressWeekIndex?: number | null;
 }
 
 export type CreatorTargetRowSave = CreatorTargetRowEditPayload & {
@@ -141,7 +145,7 @@ export function applyTargetRowEdit(
   t: CreatorTarget,
   edit: CreatorTargetRowEditPayload,
 ): CreatorTarget {
-  return syncDerivedFinancials({
+  const next: CreatorTarget = {
     ...t,
     targetVideos: Math.max(0, Math.floor(Number(edit.targetVideos)) || 0),
     tableSegmentId: normalizeTargetTableSegmentForKey(edit.tableSegmentId),
@@ -150,7 +154,20 @@ export function applyTargetRowEdit(
     tncSharingPercent: clampSubmitPercent(edit.tncSharingPercent),
     hndSharingPercent: clampSubmitPercent(edit.hndSharingPercent),
     incentivePerVideo: 0,
-  });
+  };
+  if (edit.projectId !== undefined && String(edit.projectId).trim() !== "") {
+    next.projectId = String(edit.projectId).trim();
+  }
+  if (edit.progressWeekIndex !== undefined) {
+    if (edit.progressWeekIndex === null) {
+      next.progressWeekIndex = null;
+    } else {
+      const w = Math.floor(Number(edit.progressWeekIndex));
+      next.progressWeekIndex =
+        Number.isFinite(w) && w >= 0 && w <= 3 ? w : null;
+    }
+  }
+  return syncDerivedFinancials(next);
 }
 
 /** Update leaf target video count and recompute expected revenue / profit (actuals unchanged). */
@@ -238,6 +255,20 @@ function compositeKeyFromRow(
   });
 }
 
+function maxSortIndexForCreatorMonth(
+  map: Map<string, CreatorTarget>,
+  creatorId: string,
+  month: string,
+): number {
+  let m = -1;
+  for (const t of map.values()) {
+    if (t.creatorId === creatorId && t.month === month) {
+      m = Math.max(m, t.sortIndex ?? 0);
+    }
+  }
+  return m;
+}
+
 export function mergeTargetForms(
   prev: CreatorTarget[],
   rows: TargetFormRow[],
@@ -261,6 +292,10 @@ export function mergeTargetForms(
     const tncSharingPercent = clampSubmitPercent(row.tncSharingPercent);
     const hndSharingPercent = clampSubmitPercent(row.hndSharingPercent);
 
+    const sortIndex =
+      existing?.sortIndex ??
+      maxSortIndexForCreatorMonth(map, row.creatorId, row.month) + 1;
+
     const next: CreatorTarget = syncDerivedFinancials({
       id,
       creatorId: row.creatorId,
@@ -269,7 +304,9 @@ export function mergeTargetForms(
       creatorType: row.creatorType,
       tiktokAccountId: row.tiktokAccountId,
       month: row.month,
+      sortIndex,
       tableSegmentId: tableSegmentFromFormRow(row),
+      progressWeekIndex: existing?.progressWeekIndex ?? null,
       targetVideos,
       submittedVideos,
       submittedVideoUrls,

@@ -13,11 +13,16 @@ import {
   fetchDashboardData,
   logWorkspaceActivity,
   persistTargets,
+  persistTargetSortOrder,
+  persistCreatorDashboardSortOrder,
   deleteTargetsByIds,
   seedDemoData,
   type DashboardBundle,
 } from "@/lib/dashboard/supabase-data";
-import { persistWeeklyProgressAfterTargetVideoEdits } from "@/lib/dashboard/weekly-progress-sync-from-targets";
+import {
+  persistWeeklyProgressAfterTargetVideoEdits,
+  syncWeeklyProgressWithTargetsForMonth,
+} from "@/lib/dashboard/weekly-progress-sync-from-targets";
 import {
   appendSubmittedVideoUrls,
   applyTargetRowEdit,
@@ -43,6 +48,8 @@ import {
   TABLE_CHIP_OPTIONS,
   targetMatchesTableQuickFilter,
 } from "@/lib/dashboard/table-segments";
+import { useFormSettings } from "@/hooks/useFormSettings";
+import { mergeProjects } from "@/lib/dashboard/merge-entities";
 import {
   normalizeTargetTableSegmentForKey,
   type Creator,
@@ -112,6 +119,8 @@ export interface BreakdownRow {
   actualProfit: number;
   tncSharingAmount: number;
   hndSharingAmount: number;
+  /** 0–3 = Week 1–4 weekly progress; null = belum dipetakan. */
+  progressWeekIndex: number | null;
 }
 
 export interface TotalRow extends AggregatedCreatorRow {
@@ -120,6 +129,28 @@ export interface TotalRow extends AggregatedCreatorRow {
 
 function sum(nums: number[]): number {
   return nums.reduce((a, b) => a + b, 0);
+}
+
+/** Sisipkan urutan creator yang terlihat (setelah filter) ke urutan global tanpa mengacak creator lain. */
+function mergeVisibleCreatorReorder(
+  oldFull: string[],
+  visibleNewOrder: string[],
+): string[] {
+  const S = new Set(visibleNewOrder);
+  const result: string[] = [];
+  let inserted = false;
+  for (const id of oldFull) {
+    if (S.has(id)) {
+      if (!inserted) {
+        result.push(...visibleNewOrder);
+        inserted = true;
+      }
+      continue;
+    }
+    result.push(id);
+  }
+  if (!inserted) result.push(...visibleNewOrder);
+  return result;
 }
 
 function computeStatus(submitted: number, target: number): TargetStatus {
@@ -162,9 +193,28 @@ function buildVisibleTableAggregation(
     arr.push(t);
     byCreator.set(t.creatorId, arr);
   }
+  for (const arr of byCreator.values()) {
+    arr.sort(
+      (a, b) =>
+        (a.sortIndex ?? 0) - (b.sortIndex ?? 0) ||
+        a.id.localeCompare(b.id),
+    );
+  }
+  const creatorById = new Map(creators.map((c) => [c.id, c]));
   const visibleCreatorIds = [...byCreator.keys()].filter((cid) =>
     creators.some((c) => c.id === cid),
   );
+  visibleCreatorIds.sort((a, b) => {
+    const ca = creatorById.get(a);
+    const cb = creatorById.get(b);
+    const ia = ca?.dashboardSortIndex ?? 0;
+    const ib = cb?.dashboardSortIndex ?? 0;
+    if (ia !== ib) return ia - ib;
+    return (
+      (ca?.name ?? "").localeCompare(cb?.name ?? "", "id") ||
+      a.localeCompare(b)
+    );
+  });
   const creatorRows = visibleCreatorIds.map((cid) => {
     const rows = byCreator.get(cid) ?? [];
     const targetVideos = sum(rows.map((r) => r.targetVideos));
@@ -235,7 +285,10 @@ export function useCreatorDashboard(options?: {
   });
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
 
-  const load = useCallback(async () => {
+  const { stored: formSettingsStored, persist: persistFormSettings } =
+    useFormSettings(selectedMonth);
+
+  const load = useCallback(async (): Promise<DashboardBundle | null> => {
     const gen = ++loadGenerationRef.current;
     setLoading(true);
     try {
@@ -243,11 +296,12 @@ export function useCreatorDashboard(options?: {
         await ensureWorkspaceDefaults(supabase);
         return fetchDashboardData(supabase);
       });
-      if (gen !== loadGenerationRef.current) return;
+      if (gen !== loadGenerationRef.current) return null;
       setBundle(d);
       toast.dismiss("creator-dashboard-load");
+      return d;
     } catch (e) {
-      if (gen !== loadGenerationRef.current) return;
+      if (gen !== loadGenerationRef.current) return null;
       const description = formatSupabaseClientError(e);
       toast.error("Gagal memuat data workspace", {
         id: "creator-dashboard-load",
@@ -262,6 +316,7 @@ export function useCreatorDashboard(options?: {
         );
       }
       setBundle(null);
+      return null;
     } finally {
       if (gen === loadGenerationRef.current) {
         setLoading(false);
@@ -275,6 +330,11 @@ export function useCreatorDashboard(options?: {
 
   const creators = bundle?.creators ?? [];
   const projects = bundle?.projects ?? [];
+  /** Supabase + Data settings (bulan dipilih): nama campaign di breakdown = sama seperti Data settings. */
+  const displayProjects = useMemo(
+    () => mergeProjects(projects, formSettingsStored.projects),
+    [projects, formSettingsStored.projects],
+  );
   const brands = bundle?.brands ?? [];
   const organizations = bundle?.organizations ?? [];
   const campaignObjectives = bundle?.campaignObjectives ?? [];
@@ -298,12 +358,14 @@ export function useCreatorDashboard(options?: {
     }
     if (filters.brandId !== "all") {
       const pids = new Set(
-        projects.filter((p) => p.brandId === filters.brandId).map((p) => p.id),
+        displayProjects
+          .filter((p) => p.brandId === filters.brandId)
+          .map((p) => p.id),
       );
       list = list.filter((t) => pids.has(t.projectId));
     }
     return list;
-  }, [monthTargets, filters, projects]);
+  }, [monthTargets, filters, displayProjects]);
 
   /** Baris segmen "All" (belum ditugaskan ke meja Hanindo PCP / FOLO Public) — tidak ikut chip gabungan. */
   const unassignedTableSegmentTargetCount = useMemo(
@@ -324,7 +386,7 @@ export function useCreatorDashboard(options?: {
       buildVisibleTableAggregation(
         targets,
         creators,
-        projects,
+        displayProjects,
         selectedMonth,
         filters,
         quickFilter,
@@ -333,7 +395,7 @@ export function useCreatorDashboard(options?: {
     [
       targets,
       creators,
-      projects,
+      displayProjects,
       selectedMonth,
       filters,
       quickFilter,
@@ -353,7 +415,7 @@ export function useCreatorDashboard(options?: {
       buildVisibleTableAggregation(
         targets,
         creators,
-        projects,
+        displayProjects,
         prevMonthKey,
         filters,
         quickFilter,
@@ -362,7 +424,7 @@ export function useCreatorDashboard(options?: {
     [
       targets,
       creators,
-      projects,
+      displayProjects,
       prevMonthKey,
       filters,
       quickFilter,
@@ -397,7 +459,7 @@ export function useCreatorDashboard(options?: {
         filters.brandId === "all"
           ? null
           : new Set(
-              projects
+              displayProjects
                 .filter((p) => p.brandId === filters.brandId)
                 .map((p) => p.id),
             );
@@ -417,7 +479,7 @@ export function useCreatorDashboard(options?: {
       }
       return points;
     },
-    [targets, selectedMonth, filters.brandId, projects],
+    [targets, selectedMonth, filters.brandId, displayProjects],
   );
 
   const breakdownByCreator = useCallback(
@@ -426,7 +488,7 @@ export function useCreatorDashboard(options?: {
       if (!visibleCreatorIds.includes(creatorId)) return [];
       const rows = byCreator.get(creatorId) ?? [];
       return rows.map((t) => {
-        const p = projects.find((x) => x.id === t.projectId);
+        const p = displayProjects.find((x) => x.id === t.projectId);
         const camp = campaignObjectives.find(
           (x) => x.id === t.campaignObjectiveId,
         );
@@ -458,10 +520,11 @@ export function useCreatorDashboard(options?: {
           actualProfit: t.actualProfit,
           tncSharingAmount: t.tncSharingAmount,
           hndSharingAmount: t.hndSharingAmount,
+          progressWeekIndex: t.progressWeekIndex ?? null,
         };
       });
     },
-    [filteredLeafTargets, projects, campaignObjectives],
+    [filteredLeafTargets, displayProjects, campaignObjectives],
   );
 
   const totalRow: TotalRow | null = useMemo(() => {
@@ -505,6 +568,20 @@ export function useCreatorDashboard(options?: {
       setBundle({ ...prev, targets: nextTargets });
       try {
         await persistTargets(supabase, nextTargets);
+        const months = new Set(nextTargets.map((t) => t.month));
+        for (const mk of months) {
+          try {
+            await syncWeeklyProgressWithTargetsForMonth(
+              supabase,
+              mk,
+              nextTargets,
+              prev.creators,
+              prev.projects,
+            );
+          } catch {
+            /* best-effort */
+          }
+        }
         await load();
         void logWorkspaceActivity(supabase, {
           actorEmail: actorEmailRef.current,
@@ -551,6 +628,10 @@ export function useCreatorDashboard(options?: {
             incentivePercent: u.incentivePercent,
             tncSharingPercent: u.tncSharingPercent,
             hndSharingPercent: u.hndSharingPercent,
+            ...(u.projectId !== undefined ? { projectId: u.projectId } : {}),
+            ...(u.progressWeekIndex !== undefined
+              ? { progressWeekIndex: u.progressWeekIndex }
+              : {}),
           });
         });
         return { ...p, targets: nextTargets };
@@ -560,6 +641,24 @@ export function useCreatorDashboard(options?: {
 
       try {
         await persistTargets(supabase, nextTargets);
+        const monthsTouched = new Set<string>();
+        for (const u of updates) {
+          const t = nextTargets.find((x) => x.id === u.targetId);
+          if (t) monthsTouched.add(t.month);
+        }
+        for (const mk of monthsTouched) {
+          try {
+            await syncWeeklyProgressWithTargetsForMonth(
+              supabase,
+              mk,
+              nextTargets,
+              prev.creators,
+              prev.projects,
+            );
+          } catch {
+            /* best-effort: weekly sinkron opsional */
+          }
+        }
         toast.success(
           creatorLabel
             ? `Target disimpan — ${creatorLabel}`
@@ -571,7 +670,11 @@ export function useCreatorDashboard(options?: {
                 : "Baris campaign diperbarui.",
           },
         );
-        await load();
+        /**
+         * Hindari `load()` langsung setelah upsert: sama seperti alur link video,
+         * baca penuh PostgREST kadang snapshot lama sehingga `progress_week`/submitted
+         * dari breakdown tertimpa. Bundle sudah = `nextTargets` yang di-`persistTargets`.
+         */
         void logWorkspaceActivity(supabase, {
           actorEmail: actorEmailRef.current,
           action: "update",
@@ -614,9 +717,26 @@ export function useCreatorDashboard(options?: {
       if (!nextTargets) return;
 
       const creatorLabel = creators.find((c) => c.id === creatorId)?.name;
+      const monthsToSync = new Set(
+        prev.targets.filter((t) => ids.has(t.id)).map((t) => t.month),
+      );
+      monthsToSync.add(newMonthKey);
 
       try {
         await persistTargets(supabase, nextTargets);
+        for (const mk of monthsToSync) {
+          try {
+            await syncWeeklyProgressWithTargetsForMonth(
+              supabase,
+              mk,
+              nextTargets,
+              prev.creators,
+              prev.projects,
+            );
+          } catch {
+            /* ignore */
+          }
+        }
         toast.success(
           creatorLabel
             ? `Bulan target diubah — ${creatorLabel}`
@@ -657,6 +777,173 @@ export function useCreatorDashboard(options?: {
       }
     },
     [supabase, load, breakdownByCreator],
+  );
+
+  /** Hapus satu atau beberapa baris `creator_targets` oleh id (mis. satu campaign di breakdown). */
+  const handleDeleteTargetsByIds = useCallback(
+    async (targetIds: string[]) => {
+      const ids = [...new Set(targetIds.map(String).filter(Boolean))];
+      if (ids.length === 0) return;
+      const prev = bundleRef.current;
+      const months = new Set(
+        (prev?.targets ?? [])
+          .filter((t) => ids.includes(t.id))
+          .map((t) => t.month),
+      );
+      try {
+        await deleteTargetsByIds(supabase, ids);
+        toast.success(
+          ids.length === 1
+            ? "Baris campaign dihapus"
+            : `${ids.length} baris target dihapus`,
+        );
+        await load();
+        const after = bundleRef.current;
+        if (after) {
+          for (const mk of months) {
+            try {
+              await syncWeeklyProgressWithTargetsForMonth(
+                supabase,
+                mk,
+                after.targets,
+                after.creators,
+                after.projects,
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        void logWorkspaceActivity(supabase, {
+          actorEmail: actorEmailRef.current,
+          action: "delete",
+          entityType: "creator_target",
+          summary:
+            ids.length === 1
+              ? "Menghapus satu baris campaign (target)"
+              : `Menghapus ${ids.length} baris target`,
+          metadata: { targetIds: ids },
+        });
+      } catch (e) {
+        toast.error(formatSupabaseClientError(e));
+        await load();
+      }
+    },
+    [supabase, load],
+  );
+
+  const handleReorderCreatorRows = useCallback(
+    async (visibleOrderedIds: string[]) => {
+      const prev = bundleRef.current;
+      if (!prev || visibleOrderedIds.length === 0) return;
+      if (new Set(visibleOrderedIds).size !== visibleOrderedIds.length) return;
+
+      const oldFull = [...prev.creators]
+        .sort((a, b) => {
+          const ia = a.dashboardSortIndex ?? 0;
+          const ib = b.dashboardSortIndex ?? 0;
+          if (ia !== ib) return ia - ib;
+          return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+        })
+        .map((c) => c.id);
+
+      if (visibleOrderedIds.some((id) => !oldFull.includes(id))) return;
+
+      const newFull = mergeVisibleCreatorReorder(oldFull, visibleOrderedIds);
+
+      try {
+        await persistCreatorDashboardSortOrder(supabase, newFull);
+        toast.success("Urutan creator disimpan");
+        void logWorkspaceActivity(supabase, {
+          actorEmail: actorEmailRef.current,
+          action: "update",
+          entityType: "creator",
+          summary: "Mengurutkan baris creator di PerformanceTable",
+          metadata: {
+            visibleCount: visibleOrderedIds.length,
+            total: newFull.length,
+          },
+        });
+        await load();
+      } catch (e) {
+        toast.error(formatSupabaseClientError(e));
+        await load();
+      }
+    },
+    [supabase, load],
+  );
+
+  const handleReorderBreakdown = useCallback(
+    async (creatorId: string, orderedTargetIds: string[]) => {
+      const prev = bundleRef.current;
+      if (!prev || orderedTargetIds.length === 0) return;
+
+      const monthKey = selectedMonth;
+      const allForCreatorMonth = prev.targets.filter(
+        (t) => t.creatorId === creatorId && t.month === monthKey,
+      );
+      const visibleSet = new Set(orderedTargetIds);
+      if (
+        orderedTargetIds.some(
+          (id) => !allForCreatorMonth.some((t) => t.id === id),
+        )
+      ) {
+        return;
+      }
+
+      const hidden = allForCreatorMonth
+        .filter((t) => !visibleSet.has(t.id))
+        .sort(
+          (a, b) =>
+            (a.sortIndex ?? 0) - (b.sortIndex ?? 0) ||
+            a.id.localeCompare(b.id),
+        );
+
+      const nextById = new Map<string, number>();
+      let i = 0;
+      for (const id of orderedTargetIds) nextById.set(id, i++);
+      for (const t of hidden) nextById.set(t.id, i++);
+
+      const anyChange = allForCreatorMonth.some((t) => {
+        const si = nextById.get(t.id);
+        return si !== undefined && si !== t.sortIndex;
+      });
+      if (!anyChange) return;
+
+      const nextTargets = prev.targets.map((t) => {
+        const si = nextById.get(t.id);
+        if (si === undefined) return t;
+        if (t.sortIndex === si) return t;
+        return syncDerivedFinancials({ ...t, sortIndex: si });
+      });
+
+      setBundle({ ...prev, targets: nextTargets });
+
+      const updates = allForCreatorMonth.map((t) => ({
+        id: t.id,
+        sortIndex: nextById.get(t.id) ?? t.sortIndex,
+      }));
+
+      try {
+        await persistTargetSortOrder(supabase, updates);
+        toast.success("Urutan campaign disimpan");
+        void logWorkspaceActivity(supabase, {
+          actorEmail: actorEmailRef.current,
+          action: "update",
+          entityType: "creator_target",
+          summary: `Mengurutkan campaign (drag-and-drop)`,
+          metadata: {
+            creatorId,
+            monthKey,
+            orderedTargetIds,
+          },
+        });
+      } catch (e) {
+        toast.error(formatSupabaseClientError(e));
+        await load();
+      }
+    },
+    [supabase, load, selectedMonth],
   );
 
   const handleSubmitVideoUrls = useCallback(
@@ -705,7 +992,12 @@ export function useCreatorDashboard(options?: {
             description: formatSupabaseClientError(we),
           });
         }
-        await load();
+        /**
+         * Jangan `load()` langsung setelah upsert: baca penuh ke PostgREST kadang
+         * masih mengembalikan baris lama (cache/snapshot), sehingga submitted +
+         * URL di UI tertimpa lagi (terlihat setelah buka Weekly Progress / re-render).
+         * State bundle sudah = payload yang baru di-`persistTargets`.
+         */
         void logWorkspaceActivity(supabase, {
           actorEmail: actorEmailRef.current,
           action: "update",
@@ -755,7 +1047,7 @@ export function useCreatorDashboard(options?: {
           });
         }
         toast.success("Daftar link video disimpan");
-        await load();
+        /** Lihat komentar di `handleSubmitVideoUrls`: hindari `load()` tepat setelah upsert. */
         void logWorkspaceActivity(supabase, {
           actorEmail: actorEmailRef.current,
           action: "update",
@@ -794,7 +1086,7 @@ export function useCreatorDashboard(options?: {
       const { creatorRows: rows } = buildVisibleTableAggregation(
         targets,
         creators,
-        projects,
+        displayProjects,
         key,
         filters,
         quickFilter,
@@ -809,7 +1101,7 @@ export function useCreatorDashboard(options?: {
   }, [
     targets,
     creators,
-    projects,
+    displayProjects,
     selectedMonth,
     filters,
     quickFilter,
@@ -817,6 +1109,8 @@ export function useCreatorDashboard(options?: {
   ]);
 
   return {
+    formSettingsStored,
+    persistFormSettings,
     creators,
     projects,
     brands,
@@ -840,6 +1134,9 @@ export function useCreatorDashboard(options?: {
     handleUpdateTargetRows,
     handleUpdateCreatorTargetMonth,
     handleDeleteCreatorTargets,
+    handleDeleteTargetsByIds,
+    handleReorderCreatorRows,
+    handleReorderBreakdown,
     handleSubmitVideoUrls,
     handleReplaceTargetVideoLinks,
     loading,

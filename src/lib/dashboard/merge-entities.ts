@@ -25,6 +25,8 @@ export function mergeCreators(fromDb: Creator[], fromSettings: Creator[]): Creat
         ...x,
         hanindoSharingPercent:
           x.hanindoSharingPercent ?? prev.hanindoSharingPercent ?? null,
+        dashboardSortIndex:
+          x.dashboardSortIndex ?? prev.dashboardSortIndex ?? 0,
       });
     } else {
       map.set(x.id, x);

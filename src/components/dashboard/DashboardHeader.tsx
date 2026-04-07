@@ -195,7 +195,7 @@ export function DashboardHeader({
                 type="button"
                 onClick={onSaveProject}
                 disabled={saveProjectPending}
-                title="Simpan draft brand / project / creator / TikTok dari Data settings ke Supabase. Target & edit tabel sudah tersimpan otomatis saat Anda mengubahnya."
+                title="Ambil data terbaru dari Supabase, lalu simpan sekali jalan semua brand, campaign, creator, dan akun TikTok yang terlihat (gabungan workspace + Data settings bulan ini). Memakai upsert per tabel agar tidak dobel baris. Baris target di tabel sudah tersimpan saat Anda mengedit langsung."
                 className="action-glow-hover btn-press inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-400/25 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100/95 transition hover:border-emerald-400/40 hover:bg-emerald-500/18 focus:outline-none focus:ring-2 focus:ring-emerald-400/35 disabled:pointer-events-none disabled:opacity-55"
               >
                 {saveProjectPending ? (

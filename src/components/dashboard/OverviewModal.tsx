@@ -22,11 +22,14 @@ import {
   loadRowsFromStorage,
   parseV2,
   type WeeklyProgressRow,
+  WEEKS,
 } from "@/lib/dashboard/weekly-progress-storage";
 import {
   formatSupabaseClientError,
   supabaseErrorDebugPayload,
 } from "@/lib/supabase/format-client-error";
+import { applyWeeklyTargetsHydration } from "@/lib/dashboard/weekly-progress-mirror-submitted";
+import type { Creator, CreatorTarget, Project } from "@/lib/types";
 import { cn, formatCurrency, labelMonth } from "@/lib/utils";
 
 interface OverviewModalProps {
@@ -35,6 +38,10 @@ interface OverviewModalProps {
   monthKey: string;
   /** Sumber nama baris weekly (sama dengan workspace campaigns). */
   campaignOptions: { id: string; name: string }[];
+  /** Selaraskan angka submitted weekly dengan breakdown. */
+  targets: CreatorTarget[];
+  creators: Creator[];
+  projects: Project[];
   /** Untuk memuat weekly progress bersama; tanpa ini hanya localStorage. */
   supabase?: SupabaseClient | null;
   /** Total footer tabel (filter header + chip segmen). */
@@ -120,22 +127,33 @@ function OverviewWeeklyProgressSection({
   monthKey,
   supabase,
   campaignOptions,
+  targets,
+  creators,
+  projects,
   reducedMotion,
 }: {
   open: boolean;
   monthKey: string;
   supabase: SupabaseClient | null;
   campaignOptions: { id: string; name: string }[];
+  targets: CreatorTarget[];
+  creators: Creator[];
+  projects: Project[];
   reducedMotion: boolean;
 }) {
   const [rows, setRows] = useState<WeeklyProgressRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [fetchErr, setFetchErr] = useState<string | null>(null);
+  /** `'all'` atau indeks minggu 0..WEEKS-1 untuk grafik submitted. */
+  const [submittedWeekFilter, setSubmittedWeekFilter] = useState<
+    "all" | number
+  >("all");
 
   useEffect(() => {
     if (!open) {
       setRows(null);
       setFetchErr(null);
+      setSubmittedWeekFilter("all");
       return;
     }
     let cancelled = false;
@@ -175,19 +193,40 @@ function OverviewWeeklyProgressSection({
     return m;
   }, [campaignOptions]);
 
-  const { data: stackedData, campaignKeys } = useMemo(() => {
-    if (!rows) return { data: [], campaignKeys: [] as string[] };
-    return buildStackedSubmittedChartData(
+  const chartWeekIndices = useMemo(() => {
+    if (submittedWeekFilter === "all") {
+      return Array.from({ length: WEEKS }, (_, i) => i);
+    }
+    return [submittedWeekFilter];
+  }, [submittedWeekFilter]);
+
+  const rowsForChart = useMemo(() => {
+    if (!rows) return null;
+    if (!targets.length) return rows;
+    return applyWeeklyTargetsHydration({
       rows,
-      [0, 1, 2, 3],
+      monthKey,
+      targets,
+      creators,
+      projects,
+      campaignOptions,
+    });
+  }, [rows, monthKey, targets, creators, projects, campaignOptions]);
+
+  const { data: stackedData, campaignKeys } = useMemo(() => {
+    if (!rowsForChart) return { data: [], campaignKeys: [] as string[] };
+    return buildStackedSubmittedChartData(
+      rowsForChart,
+      chartWeekIndices,
       monthKey,
       nameByProjectId,
     );
-  }, [rows, monthKey, nameByProjectId]);
+  }, [rowsForChart, monthKey, nameByProjectId, chartWeekIndices]);
 
   const weekTotals = useMemo(
-    () => (rows ? computeWeekSubmittedTotals(rows) : [0, 0, 0, 0]),
-    [rows],
+    () =>
+      rowsForChart ? computeWeekSubmittedTotals(rowsForChart) : [0, 0, 0, 0],
+    [rowsForChart],
   );
 
   const sumWeek = weekTotals.reduce((a, b) => a + b, 0);
@@ -226,12 +265,54 @@ function OverviewWeeklyProgressSection({
               {weekTotals[2] ?? 0} · W4: {weekTotals[3] ?? 0})
             </span>
           </p>
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+              Filter minggu (grafik)
+            </p>
+            <div
+              className="flex flex-wrap gap-1.5"
+              role="group"
+              aria-label="Pilih minggu untuk grafik submitted video"
+            >
+              <button
+                type="button"
+                onClick={() => setSubmittedWeekFilter("all")}
+                className={cn(
+                  "rounded-lg border px-2.5 py-1 text-[11px] font-semibold tabular-nums transition focus:outline-none focus:ring-2 focus:ring-neon-cyan/35",
+                  submittedWeekFilter === "all"
+                    ? "border-neon-cyan/45 bg-neon-cyan/15 text-neon-cyan"
+                    : "border-white/10 bg-white/[0.04] text-muted hover:border-white/18 hover:text-foreground/85",
+                )}
+              >
+                Semua
+              </button>
+              {Array.from({ length: WEEKS }, (_, w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => setSubmittedWeekFilter(w)}
+                  className={cn(
+                    "rounded-lg border px-2.5 py-1 text-[11px] font-semibold tabular-nums transition focus:outline-none focus:ring-2 focus:ring-neon-cyan/35",
+                    submittedWeekFilter === w
+                      ? "border-neon-cyan/45 bg-neon-cyan/15 text-neon-cyan"
+                      : "border-white/10 bg-white/[0.04] text-muted hover:border-white/18 hover:text-foreground/85",
+                  )}
+                >
+                  Week {w + 1}
+                </button>
+              ))}
+            </div>
+          </div>
           <WeeklySubmittedInfographicChart
             data={stackedData}
             campaignKeys={campaignKeys}
             height={200}
             reducedMotion={reducedMotion}
-            ariaLabel={`Submitted video per minggu per campaign untuk ${labelMonth(monthKey)}`}
+            ariaLabel={`Submitted video per minggu per campaign untuk ${labelMonth(monthKey)}${
+              submittedWeekFilter === "all"
+                ? ""
+                : ` — filter Week ${submittedWeekFilter + 1}`
+            }`}
           />
         </>
       )}
@@ -395,6 +476,9 @@ export function OverviewModal({
   onOpenChange,
   monthKey,
   campaignOptions,
+  targets,
+  creators,
+  projects,
   supabase = null,
   tableTotal,
   tableTotalPreviousMonth,
@@ -426,6 +510,9 @@ export function OverviewModal({
               monthKey={monthKey}
               supabase={supabase ?? null}
               campaignOptions={campaignOptions}
+              targets={targets}
+              creators={creators}
+              projects={projects}
               reducedMotion={reducedMotion}
             />
             <OverviewFigures

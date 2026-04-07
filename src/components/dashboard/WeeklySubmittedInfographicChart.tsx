@@ -59,34 +59,38 @@ export function WeeklySubmittedInfographicChart({
     );
   }
 
+  const chartHeight = Math.max(height, 52 + data.length * 52);
+
   return (
     <div
       className="rounded-xl border border-white/[0.08] bg-black/25 px-1 pb-2 pt-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
       role="img"
       aria-label={ariaLabel}
     >
-      <ResponsiveContainer width="100%" height={height}>
+      <ResponsiveContainer width="100%" height={chartHeight}>
         <BarChart
+          layout="vertical"
           data={data}
-          margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+          margin={{ top: 8, right: 12, left: 8, bottom: 8 }}
           barCategoryGap="18%"
         >
           <CartesianGrid
             strokeDasharray="4 8"
             stroke="rgba(255,255,255,0.05)"
-            vertical={false}
+            horizontal={false}
           />
           <XAxis
-            dataKey="weekLabel"
-            tick={{ fill: "rgba(148,163,184,0.9)", fontSize: 11 }}
-            tickLine={false}
-            axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
-            interval={0}
-          />
-          <YAxis
-            width={36}
+            type="number"
             allowDecimals={false}
             tick={{ fill: "rgba(148,163,184,0.8)", fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+          />
+          <YAxis
+            type="category"
+            dataKey="weekLabel"
+            width={148}
+            tick={{ fill: "rgba(148,163,184,0.9)", fontSize: 10 }}
             tickLine={false}
             axisLine={false}
           />
@@ -119,7 +123,7 @@ export function WeeklySubmittedInfographicChart({
               fill={campaignColor(key, campaignKeys)}
               isAnimationActive={!reducedMotion}
               radius={
-                idx === campaignKeys.length - 1 ? [8, 8, 0, 0] : [0, 0, 0, 0]
+                idx === campaignKeys.length - 1 ? [0, 8, 8, 0] : [0, 0, 0, 0]
               }
             />
           ))}

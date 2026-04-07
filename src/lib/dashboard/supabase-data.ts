@@ -81,6 +81,92 @@ export async function syncStoredFormEntitiesToSupabase(
   );
 }
 
+function dedupeById<T extends { id: string }>(items: T[]): T[] {
+  const map = new Map<string, T>();
+  for (const x of items) map.set(x.id, x);
+  return [...map.values()];
+}
+
+const WORKSPACE_ENTITY_DELETE_CHUNK = 120;
+
+/** Hapus baris workspace yang id-nya tidak lagi “dipertahankan” (snapshot + masih dipakai target). */
+async function deleteWorkspaceRowsNotIn(
+  supabase: SupabaseClient,
+  table: "tiktok_accounts" | "projects" | "creators" | "brands",
+  wid: string,
+  keep: Set<string>,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from(table)
+    .select("id")
+    .eq("user_id", wid);
+  if (error) throw error;
+  const toDelete = (data ?? [])
+    .map((r) => r.id as string)
+    .filter((id) => id && !keep.has(id));
+  for (let i = 0; i < toDelete.length; i += WORKSPACE_ENTITY_DELETE_CHUNK) {
+    const chunk = toDelete.slice(i, i + WORKSPACE_ENTITY_DELETE_CHUNK);
+    const { error: delErr } = await supabase
+      .from(table)
+      .delete()
+      .in("id", chunk)
+      .eq("user_id", wid);
+    if (delErr) throw delErr;
+  }
+}
+
+/**
+ * Setelah upsert Data settings: hapus entitas yang tidak ada di snapshot (kecuali masih
+ * direferensikan baris creator_targets), agar penghapusan di UI benar-benar hilang di DB.
+ * Urutan: tiktok → projects → creators → brands (FK / CASCADE aman).
+ */
+async function pruneWorkspaceEntitiesAfterSync(
+  supabase: SupabaseClient,
+  wid: string,
+  stored: StoredFormEntities,
+): Promise<void> {
+  const brands = dedupeById(stored.brands);
+  const projects = dedupeById(stored.projects);
+  const creators = dedupeById(stored.creators);
+  const tiktokAccounts = dedupeById(stored.tiktokAccounts);
+
+  const { data: targetRows, error: tErr } = await supabase
+    .from("creator_targets")
+    .select("project_id, creator_id, tiktok_account_id")
+    .eq("user_id", wid);
+  if (tErr) throw tErr;
+
+  const keptProjects = new Set(projects.map((p) => p.id));
+  const keptCreators = new Set(creators.map((c) => c.id));
+  const keptTiktok = new Set(tiktokAccounts.map((t) => t.id));
+
+  for (const r of targetRows ?? []) {
+    const pid = r.project_id as string | null | undefined;
+    const cid = r.creator_id as string | null | undefined;
+    const tid = r.tiktok_account_id as string | null | undefined;
+    if (pid) keptProjects.add(pid);
+    if (cid) keptCreators.add(cid);
+    if (tid) keptTiktok.add(tid);
+  }
+
+  const keptBrands = new Set(brands.map((b) => b.id));
+  const { data: projectRows, error: pErr } = await supabase
+    .from("projects")
+    .select("id, brand_id")
+    .eq("user_id", wid);
+  if (pErr) throw pErr;
+  for (const r of projectRows ?? []) {
+    const pid = r.id as string;
+    const bid = r.brand_id as string | null | undefined;
+    if (bid && keptProjects.has(pid)) keptBrands.add(bid);
+  }
+
+  await deleteWorkspaceRowsNotIn(supabase, "tiktok_accounts", wid, keptTiktok);
+  await deleteWorkspaceRowsNotIn(supabase, "projects", wid, keptProjects);
+  await deleteWorkspaceRowsNotIn(supabase, "creators", wid, keptCreators);
+  await deleteWorkspaceRowsNotIn(supabase, "brands", wid, keptBrands);
+}
+
 async function syncStoredFormEntitiesToSupabaseOnce(
   supabase: SupabaseClient,
   stored: StoredFormEntities,
@@ -104,34 +190,41 @@ async function syncStoredFormEntitiesToSupabaseOnce(
     orgId = data!.id as string;
   }
 
-  for (const b of stored.brands) {
+  const brands = dedupeById(stored.brands);
+  const projects = dedupeById(stored.projects);
+  const creators = dedupeById(stored.creators);
+  const tiktokAccounts = dedupeById(stored.tiktokAccounts);
+
+  if (brands.length > 0) {
     const { error } = await supabase.from("brands").upsert(
-      {
+      brands.map((b) => ({
         id: b.id,
         user_id: wid,
         name: b.name,
         table_segment: b.tableSegmentId === "folo" ? "folo" : "tnc",
-      },
+      })),
       { onConflict: "id" },
     );
     if (error) throw error;
   }
-  for (const p of stored.projects) {
+
+  if (projects.length > 0) {
     const { error } = await supabase.from("projects").upsert(
-      {
+      projects.map((p) => ({
         id: p.id,
         user_id: wid,
         name: p.name,
         brand_id: p.brandId || null,
         organization_id: p.organizationId || orgId,
-      },
+      })),
       { onConflict: "id" },
     );
     if (error) throw error;
   }
-  for (const c of stored.creators) {
+
+  if (creators.length > 0) {
     const { error } = await supabase.from("creators").upsert(
-      {
+      creators.map((c) => ({
         id: c.id,
         user_id: wid,
         name: c.name,
@@ -142,6 +235,7 @@ async function syncStoredFormEntitiesToSupabaseOnce(
         organization_id: c.organizationId || orgId,
         brand_ids: c.brandIds ?? [],
         creator_type: c.creatorType,
+        dashboard_sort_index: c.dashboardSortIndex ?? 0,
         ...(c.hanindoSharingPercent != null &&
         Number.isFinite(c.hanindoSharingPercent)
           ? {
@@ -154,23 +248,26 @@ async function syncStoredFormEntitiesToSupabaseOnce(
               ),
             }
           : {}),
-      },
+      })),
       { onConflict: "id" },
     );
     if (error) throw error;
   }
-  for (const t of stored.tiktokAccounts) {
+
+  if (tiktokAccounts.length > 0) {
     const { error } = await supabase.from("tiktok_accounts").upsert(
-      {
+      tiktokAccounts.map((t) => ({
         id: t.id,
         user_id: wid,
         creator_id: t.creatorId,
         label: t.label,
-      },
+      })),
       { onConflict: "id" },
     );
     if (error) throw error;
   }
+
+  await pruneWorkspaceEntitiesAfterSync(supabase, wid, stored);
 }
 
 export async function fetchDashboardData(
@@ -229,6 +326,9 @@ export async function fetchDashboardData(
     hanindoSharingPercent: num(
       (r as { hanindo_sharing_percent?: unknown }).hanindo_sharing_percent,
     ),
+    dashboardSortIndex: num(
+      (r as { dashboard_sort_index?: unknown }).dashboard_sort_index,
+    ),
   }));
 
   const campaignObjectives: CampaignObjective[] = (campRows ?? []).map(
@@ -253,9 +353,17 @@ export async function fetchDashboardData(
       creatorType: r.creator_type as CreatorTarget["creatorType"],
       tiktokAccountId: r.tiktok_account_id as string,
       month: r.month as string,
+      sortIndex: num((r as { sort_index?: unknown }).sort_index),
       tableSegmentId: parseTargetTableSegment(
         (r as { table_segment?: string | null }).table_segment,
       ),
+      progressWeekIndex: (() => {
+        const v = (r as { progress_week?: unknown }).progress_week;
+        if (v === null || v === undefined) return null;
+        const n = Math.floor(Number(v));
+        if (!Number.isFinite(n) || n < 0 || n > 3) return null;
+        return n;
+      })(),
       targetVideos: num(r.target_videos),
       submittedVideos: num(r.submitted_videos),
       submittedVideoUrls: parseSubmittedVideoUrls(
@@ -316,7 +424,9 @@ async function persistTargetsOnce(
     creator_type: t.creatorType,
     tiktok_account_id: t.tiktokAccountId,
     month: t.month,
+    sort_index: t.sortIndex ?? 0,
     table_segment: parseTargetTableSegment(t.tableSegmentId),
+    progress_week: t.progressWeekIndex ?? null,
     target_videos: t.targetVideos,
     submitted_videos: t.submittedVideos,
     submitted_video_urls: t.submittedVideoUrls ?? [],
@@ -339,6 +449,47 @@ async function persistTargetsOnce(
     onConflict: "id",
   });
   if (error) throw error;
+}
+
+/** Update urutan `sort_index` saja (drag-and-drop breakdown). */
+export async function persistTargetSortOrder(
+  supabase: SupabaseClient,
+  updates: { id: string; sortIndex: number }[],
+): Promise<void> {
+  if (updates.length === 0) return;
+  const wid = SHARED_DASHBOARD_USER_ID;
+  const ts = new Date().toISOString();
+  await withPostgrestSchemaRetry(supabase, async () => {
+    for (const { id, sortIndex } of updates) {
+      const { error } = await supabase
+        .from("creator_targets")
+        .update({ sort_index: sortIndex, updated_at: ts })
+        .eq("id", id)
+        .eq("user_id", wid);
+      if (error) throw error;
+    }
+  });
+}
+
+/** Urutan baris agregat creator di PerformanceTable (`dashboard_sort_index`). */
+export async function persistCreatorDashboardSortOrder(
+  supabase: SupabaseClient,
+  orderedCreatorIds: string[],
+): Promise<void> {
+  if (orderedCreatorIds.length === 0) return;
+  const wid = SHARED_DASHBOARD_USER_ID;
+  await withPostgrestSchemaRetry(supabase, async () => {
+    let i = 0;
+    for (const id of orderedCreatorIds) {
+      const { error } = await supabase
+        .from("creators")
+        .update({ dashboard_sort_index: i })
+        .eq("id", id)
+        .eq("user_id", wid);
+      if (error) throw error;
+      i++;
+    }
+  });
 }
 
 /** Simpan % Hanindo (0–50) untuk kolom [HND] di baris `creators`. */
@@ -653,7 +804,9 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
       creatorType: row.creator_type,
       tiktokAccountId: row.tiktok_account_id,
       month: row.month,
+      sortIndex: 0,
       tableSegmentId: parseTargetTableSegment(row.table_segment),
+      progressWeekIndex: null,
       targetVideos: row.target_videos,
       submittedVideos: row.submitted_videos,
       submittedVideoUrls: [...row.submitted_video_urls],
@@ -680,6 +833,8 @@ export async function seedDemoData(supabase: SupabaseClient): Promise<void> {
       tiktok_account_id: row.tiktok_account_id,
       month: row.month,
       table_segment: row.table_segment,
+      sort_index: t.sortIndex ?? 0,
+      progress_week: null,
       target_videos: t.targetVideos,
       submitted_videos: t.submittedVideos,
       submitted_video_urls: t.submittedVideoUrls ?? [],

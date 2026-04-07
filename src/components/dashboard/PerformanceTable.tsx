@@ -1,11 +1,30 @@
 "use client";
 
 import {
+  DndContext,
+  type DragEndEvent,
+  type DraggableSyntheticListeners,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   ChevronRight,
   CircleHelp,
   Download,
   Eye,
   Film,
+  GripVertical,
   Link2,
   Pencil,
   Plus,
@@ -57,6 +76,7 @@ import {
   downloadCsv,
 } from "@/lib/dashboard/export-performance-csv";
 import type { CreatorTargetRowSave } from "@/lib/dashboard/merge-targets";
+import { AppSelect } from "@/components/ui/app-select";
 import {
   filterPlausibleVideoUrls,
   isPlausibleSubmittedVideoUrl,
@@ -87,6 +107,12 @@ interface PerformanceTableProps {
   ) => void;
   onOpenSubmitVideosForCreator: (creatorId: string) => void;
   onDeleteCreatorTargets: (creatorId: string) => void | Promise<void>;
+  /** Hapus satu baris campaign di breakdown (bukan seluruh creator). */
+  onRequestDeleteBreakdownTarget: (payload: {
+    targetId: string;
+    creatorName: string;
+    projectName: string;
+  }) => void;
   onReplaceTargetVideoLinks: (
     targetId: string,
     urls: string[],
@@ -104,6 +130,599 @@ interface PerformanceTableProps {
   onOpenSubmitTargets?: () => void;
   /** Bulan tabel (untuk nama file CSV). */
   selectedMonth: string;
+  /** Drag-and-drop urutan campaign di breakdown; menyimpan `sort_index` ke Supabase. */
+  onReorderBreakdown?: (
+    creatorId: string,
+    orderedTargetIds: string[],
+  ) => void | Promise<void>;
+  /** Drag-and-drop urutan baris creator (menyimpan `dashboard_sort_index` di Supabase). */
+  onReorderCreatorRows?: (
+    orderedCreatorIds: string[],
+  ) => void | Promise<void>;
+  /** Campaign/proyek untuk dropdown di breakdown (workspace + Data settings). */
+  breakdownProjectOptions: { id: string; name: string }[];
+}
+
+function breakdownRowToSave(
+  b: BreakdownRow,
+  patch: Partial<
+    Pick<
+      CreatorTargetRowSave,
+      "targetVideos" | "projectId" | "progressWeekIndex"
+    >
+  >,
+): CreatorTargetRowSave {
+  return {
+    targetId: b.targetId,
+    targetVideos: patch.targetVideos ?? b.targetVideos,
+    tableSegmentId: b.tableSegmentId,
+    basePay: b.basePay,
+    incentivePercent: b.incentivePercent,
+    tncSharingPercent: b.tncSharingPercent,
+    hndSharingPercent: b.hndSharingPercent,
+    ...(patch.projectId !== undefined ? { projectId: patch.projectId } : {}),
+    ...(patch.progressWeekIndex !== undefined
+      ? { progressWeekIndex: patch.progressWeekIndex }
+      : {}),
+  };
+}
+
+function BreakdownCampaignTargetCells({
+  b,
+  projectOptions,
+  onUpdateTargetRows,
+}: {
+  b: BreakdownRow;
+  projectOptions: { id: string; name: string }[];
+  onUpdateTargetRows: (
+    updates: CreatorTargetRowSave[],
+  ) => void | Promise<void>;
+}) {
+  const selectOptions = useMemo(() => {
+    const byId = new Map(projectOptions.map((p) => [p.id, p]));
+    if (!byId.has(b.projectId)) {
+      byId.set(b.projectId, { id: b.projectId, name: b.projectName });
+    }
+    return [...byId.values()].sort((a, x) => a.name.localeCompare(x.name));
+  }, [projectOptions, b.projectId, b.projectName]);
+
+  const appOpts = useMemo(
+    () => selectOptions.map((p) => ({ value: p.id, label: p.name })),
+    [selectOptions],
+  );
+
+  const weekSelectOpts = useMemo(
+    () =>
+      [0, 1, 2, 3].map((w) => ({
+        value: String(w),
+        label: `Week ${w + 1}`,
+      })),
+    [],
+  );
+
+  return (
+    <>
+      <td className="min-w-[10rem] px-2 py-2 align-middle">
+        {appOpts.length === 0 ? (
+          <span className="text-foreground/90">{b.projectName}</span>
+        ) : (
+          <div onPointerDown={(e) => e.stopPropagation()}>
+            <AppSelect
+              className="h-8 border-white/10 bg-white/[0.04] text-xs shadow-none"
+              value={b.projectId}
+              onChange={(projectId) => {
+                if (projectId && projectId !== b.projectId) {
+                  void onUpdateTargetRows([
+                    breakdownRowToSave(b, { projectId }),
+                  ]);
+                }
+              }}
+              options={appOpts}
+              aria-label="Pilih campaign (Data settings)"
+            />
+          </div>
+        )}
+      </td>
+      <td className="min-w-[6.5rem] px-2 py-2 align-middle">
+        <div onPointerDown={(e) => e.stopPropagation()}>
+          <AppSelect
+            className="h-8 border-white/10 bg-white/[0.04] text-xs shadow-none"
+            value={
+              b.progressWeekIndex === null
+                ? ""
+                : String(b.progressWeekIndex)
+            }
+            emptyLabel="—"
+            onChange={(v) => {
+              const next: number | null =
+                v === ""
+                  ? null
+                  : Math.min(3, Math.max(0, parseInt(v, 10) || 0));
+              const cur = b.progressWeekIndex;
+              if (next !== cur) {
+                void onUpdateTargetRows([
+                  breakdownRowToSave(b, { progressWeekIndex: next }),
+                ]);
+              }
+            }}
+            options={weekSelectOpts}
+            aria-label="Minggu untuk Weekly progress (Week 1–4)"
+          />
+        </div>
+      </td>
+      <td className="w-[4.5rem] min-w-[4rem] max-w-[6rem] px-2 py-2 align-middle">
+        <input
+          key={`${b.targetId}-${b.targetVideos}-${b.progressWeekIndex ?? "none"}`}
+          type="number"
+          min={0}
+          step={1}
+          defaultValue={b.targetVideos}
+          title="Edit target video — Enter atau klik di luar untuk menyimpan ke Supabase"
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onBlur={(e) => {
+            const v = Math.max(
+              0,
+              Math.floor(Number(e.currentTarget.value)) || 0,
+            );
+            if (v !== b.targetVideos) {
+              void onUpdateTargetRows([
+                breakdownRowToSave(b, { targetVideos: v }),
+              ]);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+          }}
+          className="w-full rounded-md border border-white/10 bg-black/30 px-1.5 py-1 text-xs font-mono text-foreground tabular-nums outline-none focus:border-neon-cyan/50"
+        />
+      </td>
+    </>
+  );
+}
+
+function PerformanceBreakdownSortableTable({
+  creatorId,
+  creatorName,
+  breakdown,
+  videoSubmitSelectedIds,
+  onToggleVideoSubmitTarget,
+  onToggleAllVideoSubmitTargets,
+  onReplaceTargetVideoLinks,
+  onRequestRowHighlight,
+  hanindoPctByCreator,
+  defaultHanindoPct,
+  onReorderBreakdown,
+  onRequestDeleteBreakdownTarget,
+  projectOptions,
+  onUpdateTargetRows,
+}: {
+  creatorId: string;
+  creatorName: string;
+  breakdown: BreakdownRow[];
+  videoSubmitSelectedIds: Set<string>;
+  onToggleVideoSubmitTarget: (targetId: string, selected: boolean) => void;
+  onToggleAllVideoSubmitTargets: (
+    targetIds: string[],
+    selected: boolean,
+  ) => void;
+  onReplaceTargetVideoLinks: (
+    targetId: string,
+    urls: string[],
+  ) => void | Promise<void>;
+  onRequestRowHighlight?: (creatorId: string) => void;
+  hanindoPctByCreator: Record<string, number>;
+  defaultHanindoPct: number;
+  onReorderBreakdown?: (
+    creatorId: string,
+    orderedTargetIds: string[],
+  ) => void | Promise<void>;
+  onRequestDeleteBreakdownTarget: (payload: {
+    targetId: string;
+    creatorName: string;
+    projectName: string;
+  }) => void;
+  projectOptions: { id: string; name: string }[];
+  onUpdateTargetRows: (
+    updates: CreatorTargetRowSave[],
+  ) => void | Promise<void>;
+}) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const sortableIds = useMemo(
+    () => breakdown.map((b) => b.targetId),
+    [breakdown],
+  );
+
+  const onDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (!onReorderBreakdown) return;
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = sortableIds.indexOf(String(active.id));
+      const newIndex = sortableIds.indexOf(String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return;
+      const next = arrayMove(sortableIds, oldIndex, newIndex);
+      void onReorderBreakdown(creatorId, next);
+    },
+    [creatorId, onReorderBreakdown, sortableIds],
+  );
+
+  const thead = (
+    <thead>
+      <tr className="text-[10px] uppercase tracking-wider text-muted">
+        <th
+          className="w-8 px-1 py-2 text-left"
+          title="Seret untuk mengurutkan campaign"
+        >
+          <span className="sr-only">Urutkan</span>
+          <GripVertical
+            className="mx-auto h-3.5 w-3.5 opacity-50"
+            aria-hidden
+          />
+        </th>
+        <th className="w-10 px-2 py-2 text-left">
+          <span className="sr-only">Pilih untuk submit video</span>
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 rounded border-white/25 bg-white/5 text-neon-cyan focus:ring-neon-cyan/40"
+            checked={
+              breakdown.length > 0 &&
+              breakdown.every((x) => videoSubmitSelectedIds.has(x.targetId))
+            }
+            ref={(el) => {
+              if (!el) return;
+              const all =
+                breakdown.length > 0 &&
+                breakdown.every((x) =>
+                  videoSubmitSelectedIds.has(x.targetId),
+                );
+              const some = breakdown.some((x) =>
+                videoSubmitSelectedIds.has(x.targetId),
+              );
+              el.indeterminate = some && !all;
+            }}
+            onChange={(e) =>
+              onToggleAllVideoSubmitTargets(
+                breakdown.map((x) => x.targetId),
+                e.target.checked,
+              )
+            }
+            aria-label="Pilih semua campaign untuk submit video"
+          />
+        </th>
+        <th className="whitespace-nowrap px-3 py-2 text-left">Table</th>
+        <th className="px-3 py-2 text-left">Campaign</th>
+        <th className="whitespace-nowrap px-2 py-2 text-left" title="Terkait modal Weekly progress">
+          Week
+        </th>
+        <th className="px-3 py-2 text-left">Target</th>
+        <th className="px-3 py-2 text-left">Submitted</th>
+        <th className="px-3 py-2 text-left">Exp. Rev</th>
+        <th className="px-3 py-2 text-left">Act. Rev</th>
+        <th
+          className="whitespace-nowrap px-2 py-2 text-left text-neon-cyan/80"
+          title="ER − incentives − [HND] per baris"
+        >
+          [TNC] Exp.
+        </th>
+        <th
+          className="whitespace-nowrap px-2 py-2 text-left text-neon-purple/80"
+          title="15% × ER baris"
+        >
+          [HND] Exp.
+        </th>
+        <th className="w-10 px-1 py-2 text-center">
+          <span className="sr-only">Hapus baris</span>
+        </th>
+      </tr>
+    </thead>
+  );
+
+  const rowProps = {
+    videoSubmitSelectedIds,
+    onToggleVideoSubmitTarget,
+    onReplaceTargetVideoLinks,
+    onRequestRowHighlight,
+    hanindoPctByCreator,
+    defaultHanindoPct,
+    creatorName,
+    onRequestDeleteBreakdownTarget,
+    projectOptions,
+    onUpdateTargetRows,
+  };
+
+  if (onReorderBreakdown && breakdown.length > 0) {
+    return (
+      <DndContext
+        id="perf-breakdown-rows"
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={onDragEnd}
+      >
+        <table className="w-full text-xs">
+          {thead}
+          <SortableContext
+            items={sortableIds}
+            strategy={verticalListSortingStrategy}
+          >
+            <tbody>
+              {breakdown.map((b) => (
+                <SortableBreakdownRow key={b.targetId} row={b} {...rowProps} />
+              ))}
+            </tbody>
+          </SortableContext>
+        </table>
+      </DndContext>
+    );
+  }
+
+  return (
+    <table className="w-full text-xs">
+      {thead}
+      <tbody>
+        {breakdown.map((b) => (
+          <StaticBreakdownRow key={b.targetId} row={b} {...rowProps} />
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+type BreakdownRowProps = {
+  row: BreakdownRow;
+  videoSubmitSelectedIds: Set<string>;
+  onToggleVideoSubmitTarget: (targetId: string, selected: boolean) => void;
+  onReplaceTargetVideoLinks: (
+    targetId: string,
+    urls: string[],
+  ) => void | Promise<void>;
+  onRequestRowHighlight?: (creatorId: string) => void;
+  hanindoPctByCreator: Record<string, number>;
+  defaultHanindoPct: number;
+  creatorName: string;
+  onRequestDeleteBreakdownTarget: (payload: {
+    targetId: string;
+    creatorName: string;
+    projectName: string;
+  }) => void;
+  projectOptions: { id: string; name: string }[];
+  onUpdateTargetRows: (
+    updates: CreatorTargetRowSave[],
+  ) => void | Promise<void>;
+};
+
+function StaticBreakdownRow({ row: b, ...rest }: BreakdownRowProps) {
+  const hndRate =
+    (rest.hanindoPctByCreator[b.creatorId] ?? rest.defaultHanindoPct) / 100;
+  const usePctRow = usesSharingPercentModel(b);
+  const { tncExpectedProfit, hndExpectedProfit } = usePctRow
+    ? {
+        tncExpectedProfit: b.tncSharingAmount,
+        hndExpectedProfit: b.hndSharingAmount,
+      }
+    : splitErForTncHndColumns(b.expectedRevenue, b.incentives, hndRate);
+
+  return (
+    <tr className="border-t border-white/[0.04]">
+      <td className="w-8 px-1 py-2 align-middle">
+        <span className="inline-block w-7" aria-hidden />
+      </td>
+      <td className="px-2 py-2 align-middle">
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 rounded border-white/25 bg-white/5 text-neon-cyan focus:ring-neon-cyan/40"
+          checked={rest.videoSubmitSelectedIds.has(b.targetId)}
+          onChange={(e) =>
+            rest.onToggleVideoSubmitTarget(b.targetId, e.target.checked)
+          }
+          aria-label={`Submit video: ${b.projectName}`}
+        />
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-muted">
+        {b.tableSegmentLabel}
+      </td>
+      <BreakdownCampaignTargetCells
+        b={b}
+        projectOptions={rest.projectOptions}
+        onUpdateTargetRows={rest.onUpdateTargetRows}
+      />
+      <td className="px-3 py-2 font-mono">
+        <div className="flex items-center gap-1.5">
+          <span>{b.submittedVideos}</span>
+          <SubmittedVideoLinksPopover
+            urls={b.submittedVideoUrls}
+            submittedVideos={b.submittedVideos}
+            onSave={(urls) =>
+              void rest.onReplaceTargetVideoLinks(b.targetId, urls)
+            }
+            onSaveComplete={() => rest.onRequestRowHighlight?.(b.creatorId)}
+          />
+        </div>
+      </td>
+      <td className="px-3 py-2">{formatCurrency(b.expectedRevenue)}</td>
+      <td className="px-3 py-2">{formatCurrency(b.actualRevenue)}</td>
+      <td className="px-2 py-2 tabular-nums text-neon-cyan/85">
+        {formatCurrency(tncExpectedProfit)}
+      </td>
+      <td className="px-2 py-2 tabular-nums text-neon-purple/85">
+        {formatCurrency(hndExpectedProfit)}
+      </td>
+      <td className="w-10 px-1 py-2 align-middle">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            rest.onRequestDeleteBreakdownTarget({
+              targetId: b.targetId,
+              creatorName: rest.creatorName,
+              projectName: b.projectName,
+            });
+          }}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-muted transition hover:border-red-400/45 hover:bg-red-500/10 hover:text-red-300"
+          title="Hapus baris campaign ini"
+          aria-label={`Hapus campaign ${b.projectName}`}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function SortableBreakdownRow({ row: b, ...rest }: BreakdownRowProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: b.targetId });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.92 : undefined,
+    zIndex: isDragging ? 2 : undefined,
+    position: "relative" as const,
+  };
+
+  const hndRate =
+    (rest.hanindoPctByCreator[b.creatorId] ?? rest.defaultHanindoPct) / 100;
+  const usePctRow = usesSharingPercentModel(b);
+  const { tncExpectedProfit, hndExpectedProfit } = usePctRow
+    ? {
+        tncExpectedProfit: b.tncSharingAmount,
+        hndExpectedProfit: b.hndSharingAmount,
+      }
+    : splitErForTncHndColumns(b.expectedRevenue, b.incentives, hndRate);
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "border-t border-white/[0.04]",
+        isDragging &&
+          "bg-white/[0.04] shadow-[inset_0_0_0_1px_rgba(50,230,255,0.18)]",
+      )}
+      {...attributes}
+    >
+      <td className="w-8 px-1 py-2 align-middle">
+        <button
+          type="button"
+          className="touch-none cursor-grab rounded p-0.5 text-muted transition hover:bg-white/10 hover:text-neon-cyan active:cursor-grabbing"
+          aria-label="Seret untuk mengurutkan baris"
+          {...listeners}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+      </td>
+      <td className="px-2 py-2 align-middle">
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 rounded border-white/25 bg-white/5 text-neon-cyan focus:ring-neon-cyan/40"
+          checked={rest.videoSubmitSelectedIds.has(b.targetId)}
+          onChange={(e) =>
+            rest.onToggleVideoSubmitTarget(b.targetId, e.target.checked)
+          }
+          aria-label={`Submit video: ${b.projectName}`}
+        />
+      </td>
+      <td className="whitespace-nowrap px-3 py-2 text-muted">
+        {b.tableSegmentLabel}
+      </td>
+      <BreakdownCampaignTargetCells
+        b={b}
+        projectOptions={rest.projectOptions}
+        onUpdateTargetRows={rest.onUpdateTargetRows}
+      />
+      <td className="px-3 py-2 font-mono">
+        <div className="flex items-center gap-1.5">
+          <span>{b.submittedVideos}</span>
+          <SubmittedVideoLinksPopover
+            urls={b.submittedVideoUrls}
+            submittedVideos={b.submittedVideos}
+            onSave={(urls) =>
+              void rest.onReplaceTargetVideoLinks(b.targetId, urls)
+            }
+            onSaveComplete={() => rest.onRequestRowHighlight?.(b.creatorId)}
+          />
+        </div>
+      </td>
+      <td className="px-3 py-2">{formatCurrency(b.expectedRevenue)}</td>
+      <td className="px-3 py-2">{formatCurrency(b.actualRevenue)}</td>
+      <td className="px-2 py-2 tabular-nums text-neon-cyan/85">
+        {formatCurrency(tncExpectedProfit)}
+      </td>
+      <td className="px-2 py-2 tabular-nums text-neon-purple/85">
+        {formatCurrency(hndExpectedProfit)}
+      </td>
+      <td className="w-10 px-1 py-2 align-middle">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            rest.onRequestDeleteBreakdownTarget({
+              targetId: b.targetId,
+              creatorName: rest.creatorName,
+              projectName: b.projectName,
+            });
+          }}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-muted transition hover:border-red-400/45 hover:bg-red-500/10 hover:text-red-300"
+          title="Hapus baris campaign ini"
+          aria-label={`Hapus campaign ${b.projectName}`}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function SortableCreatorTbody({
+  id,
+  disabled,
+  groupClassName,
+  children,
+}: {
+  id: string;
+  disabled: boolean;
+  groupClassName?: string;
+  children: (
+    dragListeners: DraggableSyntheticListeners | undefined,
+  ) => React.ReactNode;
+}) {
+  const { setNodeRef, transform, transition, isDragging, attributes, listeners } =
+    useSortable({ id, disabled });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.94 : undefined,
+    position: "relative" as const,
+  };
+
+  return (
+    <tbody
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        groupClassName,
+        isDragging &&
+          "[&>tr:first-child]:bg-white/[0.05] [&>tr:first-child]:shadow-[inset_0_0_0_1px_rgba(50,230,255,0.22)]",
+      )}
+      {...attributes}
+    >
+      {children(disabled ? undefined : listeners)}
+    </tbody>
+  );
 }
 
 export function PerformanceTable({
@@ -120,12 +739,16 @@ export function PerformanceTable({
   onToggleAllVideoSubmitTargets,
   onOpenSubmitVideosForCreator,
   onDeleteCreatorTargets,
+  onRequestDeleteBreakdownTarget,
   onReplaceTargetVideoLinks,
   onUpdateCreatorTargetMonth,
   highlightedCreatorId = null,
   onRequestRowHighlight,
   onOpenSubmitTargets,
   selectedMonth,
+  onReorderBreakdown,
+  onReorderCreatorRows,
+  breakdownProjectOptions,
 }: PerformanceTableProps) {
   const { snapshot: hanindoLocalSnapshot } = useCreatorHanindoPercents();
   const hanindoPctByCreator = useMemo(
@@ -133,6 +756,34 @@ export function PerformanceTable({
     [creators, hanindoLocalSnapshot],
   );
   const defaultHanindoPct = DEFAULT_HANINDO_SHARING_PERCENT;
+  const sortableCreatorIds = useMemo(
+    () => creatorRows.map((r) => r.creatorId),
+    [creatorRows],
+  );
+  const allowCreatorReorder =
+    Boolean(onReorderCreatorRows) && creatorRows.length > 1;
+
+  const creatorRowSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const onCreatorDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (!onReorderCreatorRows || !allowCreatorReorder) return;
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIndex = sortableCreatorIds.indexOf(String(active.id));
+      const newIndex = sortableCreatorIds.indexOf(String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return;
+      const next = arrayMove(sortableCreatorIds, oldIndex, newIndex);
+      void onReorderCreatorRows(next);
+    },
+    [allowCreatorReorder, onReorderCreatorRows, sortableCreatorIds],
+  );
+
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [editCtx, setEditCtx] = useState<{
     creatorId: string;
@@ -254,7 +905,17 @@ export function PerformanceTable({
         <table className="min-w-[1440px] w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-              <th className={cn(th, "sticky left-0 z-20 min-w-[240px] bg-[#070c18]/95 backdrop-blur")}>
+              <th
+                className={cn(
+                  th,
+                  "sticky left-0 z-20 min-w-[240px] bg-[#070c18]/95 backdrop-blur",
+                )}
+                title={
+                  allowCreatorReorder
+                    ? "Geser baris: pakai ikon grip di kiri Chevron (minimal 2 creator di tabel)."
+                    : undefined
+                }
+              >
                 Creator
               </th>
               <th className={th}>Target</th>
@@ -293,24 +954,38 @@ export function PerformanceTable({
             </tr>
           </thead>
 
-          {creatorRows.map((row) => {
-            const c = creators.find((x) => x.id === row.creatorId);
-            if (!c) return null;
-            const avatarSrc = (c.avatarUrl ?? "").trim();
-            const hasAvatar = avatarSrc.length > 0;
-            const open = expanded[row.creatorId];
-            const breakdown = breakdownByCreator(row.creatorId);
-            const monthForPicker =
-              row.targetMonthKey ??
-              breakdown[0]?.month ??
-              selectedMonth;
-            const mixedMonths = row.targetMonthKey === null;
+          <DndContext
+            id="perf-creator-rows"
+            sensors={creatorRowSensors}
+            collisionDetection={closestCenter}
+            onDragEnd={onCreatorDragEnd}
+          >
+            <SortableContext
+              items={sortableCreatorIds}
+              strategy={verticalListSortingStrategy}
+            >
+              {creatorRows.map((row) => {
+                const c = creators.find((x) => x.id === row.creatorId);
+                if (!c) return null;
+                const avatarSrc = (c.avatarUrl ?? "").trim();
+                const hasAvatar = avatarSrc.length > 0;
+                const open = expanded[row.creatorId];
+                const breakdown = breakdownByCreator(row.creatorId);
+                const monthForPicker =
+                  row.targetMonthKey ??
+                  breakdown[0]?.month ??
+                  selectedMonth;
+                const mixedMonths = row.targetMonthKey === null;
 
-            return (
-              <tbody
-                key={row.creatorId}
-                className="group border-b border-white/[0.04] last:border-b-0"
-              >
+                return (
+                  <SortableCreatorTbody
+                    key={row.creatorId}
+                    id={row.creatorId}
+                    disabled={!allowCreatorReorder}
+                    groupClassName="group border-b border-white/[0.04] last:border-b-0"
+                  >
+                    {(dragListeners) => (
+                      <>
                 <tr
                   className={cn(
                     "relative transition-colors duration-300",
@@ -327,6 +1002,17 @@ export function PerformanceTable({
                     )}
                   >
                     <div className="flex items-start gap-3">
+                      {allowCreatorReorder ? (
+                        <button
+                          type="button"
+                          className="touch-none mt-1 cursor-grab rounded-md p-0.5 text-muted transition hover:bg-white/10 hover:text-neon-cyan active:cursor-grabbing"
+                          aria-label="Seret untuk mengurutkan baris creator"
+                          title="Uruskan creator"
+                          {...(dragListeners ?? {})}
+                        >
+                          <GripVertical className="h-4 w-4" />
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => toggle(row.creatorId)}
@@ -536,172 +1222,41 @@ export function PerformanceTable({
                       <div className="min-h-0 overflow-hidden">
                         <div className="px-3 pb-4 pt-1">
                           <div className="ml-12 overflow-hidden rounded-xl border border-white/[0.06] bg-black/20">
-                            <table className="w-full text-xs">
-                              <thead>
-                                <tr className="text-[10px] uppercase tracking-wider text-muted">
-                                  <th className="w-10 px-2 py-2 text-left">
-                                    <span className="sr-only">
-                                      Pilih untuk submit video
-                                    </span>
-                                    <input
-                                      type="checkbox"
-                                      className="h-3.5 w-3.5 rounded border-white/25 bg-white/5 text-neon-cyan focus:ring-neon-cyan/40"
-                                      checked={
-                                        breakdown.length > 0 &&
-                                        breakdown.every((x) =>
-                                          videoSubmitSelectedIds.has(
-                                            x.targetId,
-                                          ),
-                                        )
-                                      }
-                                      ref={(el) => {
-                                        if (!el) return;
-                                        const all =
-                                          breakdown.length > 0 &&
-                                          breakdown.every((x) =>
-                                            videoSubmitSelectedIds.has(
-                                              x.targetId,
-                                            ),
-                                          );
-                                        const some = breakdown.some((x) =>
-                                          videoSubmitSelectedIds.has(
-                                            x.targetId,
-                                          ),
-                                        );
-                                        el.indeterminate = some && !all;
-                                      }}
-                                      onChange={(e) =>
-                                        onToggleAllVideoSubmitTargets(
-                                          breakdown.map((x) => x.targetId),
-                                          e.target.checked,
-                                        )
-                                      }
-                                      aria-label="Pilih semua campaign untuk submit video"
-                                    />
-                                  </th>
-                                  <th className="whitespace-nowrap px-3 py-2 text-left">
-                                    Table
-                                  </th>
-                                  <th className="px-3 py-2 text-left">
-                                    Campaign
-                                  </th>
-                                  <th className="px-3 py-2 text-left">
-                                    Target
-                                  </th>
-                                  <th className="px-3 py-2 text-left">
-                                    Submitted
-                                  </th>
-                                  <th className="px-3 py-2 text-left">
-                                    Exp. Rev
-                                  </th>
-                                  <th className="px-3 py-2 text-left">
-                                    Act. Rev
-                                  </th>
-                                  <th
-                                    className="whitespace-nowrap px-2 py-2 text-left text-neon-cyan/80"
-                                    title="ER − incentives − [HND] per baris"
-                                  >
-                                    [TNC] Exp.
-                                  </th>
-                                  <th
-                                    className="whitespace-nowrap px-2 py-2 text-left text-neon-purple/80"
-                                    title="15% × ER baris"
-                                  >
-                                    [HND] Exp.
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {breakdown.map((b) => {
-                                  const hndRate =
-                                    (hanindoPctByCreator[b.creatorId] ??
-                                      defaultHanindoPct) / 100;
-                                  const usePctRow = usesSharingPercentModel(b);
-                                  const { tncExpectedProfit, hndExpectedProfit } =
-                                    usePctRow
-                                      ? {
-                                          tncExpectedProfit: b.tncSharingAmount,
-                                          hndExpectedProfit: b.hndSharingAmount,
-                                        }
-                                      : splitErForTncHndColumns(
-                                          b.expectedRevenue,
-                                          b.incentives,
-                                          hndRate,
-                                        );
-                                  return (
-                                  <tr
-                                    key={b.targetId}
-                                    className="border-t border-white/[0.04]"
-                                  >
-                                    <td className="px-2 py-2 align-middle">
-                                      <input
-                                        type="checkbox"
-                                        className="h-3.5 w-3.5 rounded border-white/25 bg-white/5 text-neon-cyan focus:ring-neon-cyan/40"
-                                        checked={videoSubmitSelectedIds.has(
-                                          b.targetId,
-                                        )}
-                                        onChange={(e) =>
-                                          onToggleVideoSubmitTarget(
-                                            b.targetId,
-                                            e.target.checked,
-                                          )
-                                        }
-                                        aria-label={`Submit video: ${b.projectName}`}
-                                      />
-                                    </td>
-                                    <td className="whitespace-nowrap px-3 py-2 text-muted">
-                                      {b.tableSegmentLabel}
-                                    </td>
-                                    <td className="px-3 py-2 text-foreground/90">
-                                      {b.projectName}
-                                    </td>
-                                    <td className="px-3 py-2 font-mono">
-                                      {b.targetVideos}
-                                    </td>
-                                    <td className="px-3 py-2 font-mono">
-                                      <div className="flex items-center gap-1.5">
-                                        <span>{b.submittedVideos}</span>
-                                        <SubmittedVideoLinksPopover
-                                          urls={b.submittedVideoUrls}
-                                          submittedVideos={b.submittedVideos}
-                                          onSave={(urls) =>
-                                            void onReplaceTargetVideoLinks(
-                                              b.targetId,
-                                              urls,
-                                            )
-                                          }
-                                          onSaveComplete={() =>
-                                            onRequestRowHighlight?.(b.creatorId)
-                                          }
-                                        />
-                                      </div>
-                                    </td>
-                                    <td className="px-3 py-2">
-                                      {formatCurrency(b.expectedRevenue)}
-                                    </td>
-                                    <td className="px-3 py-2">
-                                      {formatCurrency(b.actualRevenue)}
-                                    </td>
-                                    <td className="px-2 py-2 tabular-nums text-neon-cyan/85">
-                                      {formatCurrency(tncExpectedProfit)}
-                                    </td>
-                                    <td className="px-2 py-2 tabular-nums text-neon-purple/85">
-                                      {formatCurrency(hndExpectedProfit)}
-                                    </td>
-                                  </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
+                            <PerformanceBreakdownSortableTable
+                              creatorId={row.creatorId}
+                              creatorName={c.name}
+                              breakdown={breakdown}
+                              videoSubmitSelectedIds={videoSubmitSelectedIds}
+                              onToggleVideoSubmitTarget={onToggleVideoSubmitTarget}
+                              onToggleAllVideoSubmitTargets={
+                                onToggleAllVideoSubmitTargets
+                              }
+                              onReplaceTargetVideoLinks={
+                                onReplaceTargetVideoLinks
+                              }
+                              onRequestRowHighlight={onRequestRowHighlight}
+                              hanindoPctByCreator={hanindoPctByCreator}
+                              defaultHanindoPct={defaultHanindoPct}
+                              onReorderBreakdown={onReorderBreakdown}
+                              onRequestDeleteBreakdownTarget={
+                                onRequestDeleteBreakdownTarget
+                              }
+                              projectOptions={breakdownProjectOptions}
+                              onUpdateTargetRows={onUpdateTargetRows}
+                            />
                           </div>
                         </div>
                       </div>
                     </div>
                   </td>
                 </tr>
-              </tbody>
-            );
-          })}
+                      </>
+                    )}
+                  </SortableCreatorTbody>
+                );
+              })}
+            </SortableContext>
+          </DndContext>
 
           {totalRow ? (
             <tfoot>
@@ -830,6 +1385,14 @@ function TableActionLegend() {
         <p className="mb-2 font-semibold text-foreground">Ikon aksi baris</p>
         <ul className="space-y-2 text-muted">
           <li className="flex gap-2">
+            <GripVertical className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-cyan/75" />
+            <span>
+              <strong className="text-foreground/90">Grip</strong> (kiri chevron)
+              — seret untuk mengurutkan baris creator (minimal 2 baris di tabel);
+              urutan tersimpan di workspace.
+            </span>
+          </li>
+          <li className="flex gap-2">
             <Eye className="mt-0.5 h-3.5 w-3.5 shrink-0 text-neon-cyan/80" />
             <span>
               <strong className="text-foreground/90">Details</strong> — buka
@@ -862,6 +1425,14 @@ function TableActionLegend() {
             <span>
               <strong className="text-foreground/90">Delete</strong> — hapus
               semua target creator (bulan &amp; filter saat ini).
+            </span>
+          </li>
+          <li className="flex gap-2">
+            <Trash2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-300/90" />
+            <span>
+              <strong className="text-foreground/90">Hapus di breakdown</strong>{" "}
+              — ikon tempat sampah di kolom terkanan tabel per-campaign (satu
+              baris saja).
             </span>
           </li>
         </ul>

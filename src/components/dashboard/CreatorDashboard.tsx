@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCreatorDashboard } from "@/hooks/useCreatorDashboard";
-import { useFormSettings } from "@/hooks/useFormSettings";
+import type { StoredFormEntities } from "@/lib/dashboard/form-settings-storage";
 import {
   logWorkspaceActivity,
   syncStoredFormEntitiesToSupabase,
@@ -142,6 +142,8 @@ function CreatorDashboardInner({
   onSignOut: () => void;
 }) {
   const {
+    formSettingsStored,
+    persistFormSettings,
     creators,
     projects,
     brands,
@@ -162,6 +164,9 @@ function CreatorDashboardInner({
     handleUpdateTargetRows,
     handleUpdateCreatorTargetMonth,
     handleDeleteCreatorTargets,
+    handleDeleteTargetsByIds,
+    handleReorderCreatorRows,
+    handleReorderBreakdown,
     handleSubmitVideoUrls,
     handleReplaceTargetVideoLinks,
     targets,
@@ -175,9 +180,6 @@ function CreatorDashboardInner({
     seedIfEmpty,
     reload,
   } = useCreatorDashboard({ actorEmail: userEmail ?? null });
-
-  const { stored: formSettingsStored, persist: persistFormSettings } =
-    useFormSettings();
   const supabaseForm = useMemo(() => createClient(), []);
 
   const mergedBrands = useMemo(
@@ -200,24 +202,49 @@ function CreatorDashboardInner({
   const handleSaveProject = useCallback(async () => {
     setSaveProjectBusy(true);
     try {
-      await syncStoredFormEntitiesToSupabase(supabaseForm, formSettingsStored);
+      const fresh = await reload();
+      if (!fresh) {
+        toast.error("Belum bisa menyimpan", {
+          description:
+            "Data workspace terbaru gagal dimuat. Tunggu sebentar lalu coba lagi.",
+        });
+        return;
+      }
+
+      /**
+       * Gabungkan snapshot Supabase yang baru saja di-fetch + Data settings
+       * (per bulan) supaya tidak menimpa server dengan state React yang basi.
+       */
+      const merged: StoredFormEntities = {
+        v: 1,
+        brands: mergeBrands(fresh.brands, formSettingsStored.brands),
+        projects: mergeProjects(fresh.projects, formSettingsStored.projects),
+        creators: mergeCreators(fresh.creators, formSettingsStored.creators),
+        tiktokAccounts: mergeTikTokAccounts(
+          fresh.tiktokAccounts,
+          formSettingsStored.tiktokAccounts,
+        ),
+      };
+      await syncStoredFormEntitiesToSupabase(supabaseForm, merged);
+      persistFormSettings(merged);
       await logWorkspaceActivity(supabaseForm, {
         actorEmail: userEmail,
         action: "sync",
         entityType: "workspace_entities",
         summary:
-          "Simpan proyek — sinkron draft Data settings (brand, project, creator, TikTok) ke Supabase",
+          "Simpan proyek — sinkron brand / campaign / creator / TikTok ke Supabase (setelah refresh data)",
         metadata: {
-          brands: formSettingsStored.brands.length,
-          projects: formSettingsStored.projects.length,
-          creators: formSettingsStored.creators.length,
-          tiktokAccounts: formSettingsStored.tiktokAccounts.length,
+          brands: merged.brands.length,
+          settingsMonthKey: selectedMonth,
+          projects: merged.projects.length,
+          creators: merged.creators.length,
+          tiktokAccounts: merged.tiktokAccounts.length,
         },
       });
       await reload();
       toast.success("Proyek tersimpan", {
         description:
-          "Draft dari Data settings sudah ke Supabase. Target, link video, dan edit tabel tersimpan otomatis saat Anda mengubahnya.",
+          "Perubahan di Data settings untuk bulan ini sudah di-push ke Supabase (batch upsert) dan disimpan lokal.",
       });
     } catch (e) {
       toast.error("Gagal menyimpan proyek", {
@@ -226,7 +253,14 @@ function CreatorDashboardInner({
     } finally {
       setSaveProjectBusy(false);
     }
-  }, [supabaseForm, formSettingsStored, reload, userEmail]);
+  }, [
+    supabaseForm,
+    formSettingsStored,
+    persistFormSettings,
+    reload,
+    userEmail,
+    selectedMonth,
+  ]);
 
   useEffect(() => {
     const ok = TABLE_CHIP_OPTIONS.some((s) => s.id === quickFilter);
@@ -262,6 +296,11 @@ function CreatorDashboardInner({
     creatorName: string;
     targetCount: number;
     targetIds: string[];
+  } | null>(null);
+  const [deleteBreakdownRowConfirm, setDeleteBreakdownRowConfirm] = useState<{
+    targetId: string;
+    creatorName: string;
+    projectName: string;
   } | null>(null);
 
   useEffect(() => {
@@ -346,6 +385,29 @@ function CreatorDashboardInner({
       return next;
     });
   }, [deleteConfirm, handleDeleteCreatorTargets]);
+
+  const requestDeleteBreakdownTarget = useCallback(
+    (payload: {
+      targetId: string;
+      creatorName: string;
+      projectName: string;
+    }) => {
+      setDeleteBreakdownRowConfirm(payload);
+    },
+    [],
+  );
+
+  const runConfirmedDeleteBreakdownTarget = useCallback(async () => {
+    if (!deleteBreakdownRowConfirm) return;
+    const { targetId } = deleteBreakdownRowConfirm;
+    setDeleteBreakdownRowConfirm(null);
+    await handleDeleteTargetsByIds([targetId]);
+    setVideoSubmitTargetIds((prev) => {
+      const next = new Set(prev);
+      next.delete(targetId);
+      return next;
+    });
+  }, [deleteBreakdownRowConfirm, handleDeleteTargetsByIds]);
 
   const submitVideosAndClear = useCallback(
     async (deltas: { targetId: string; urls: string[] }[]) => {
@@ -504,6 +566,10 @@ function CreatorDashboardInner({
                   selectedMonth={selectedMonth}
                   onCreatorClick={openCreator}
                   onUpdateTargetRows={handleUpdateTargetRows}
+                  breakdownProjectOptions={mergedProjects.map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                  }))}
                   tableSegments={TABLE_CHIP_OPTIONS}
                   videoSubmitSelectedIds={videoSubmitTargetIds}
                   onToggleVideoSubmitTarget={toggleVideoSubmitTarget}
@@ -512,11 +578,14 @@ function CreatorDashboardInner({
                   }
                   onOpenSubmitVideosForCreator={openSubmitVideosForCreator}
                   onDeleteCreatorTargets={requestDeleteCreatorTargets}
+                  onRequestDeleteBreakdownTarget={requestDeleteBreakdownTarget}
                   onReplaceTargetVideoLinks={handleReplaceTargetVideoLinks}
                   onUpdateCreatorTargetMonth={handleUpdateCreatorTargetMonth}
                   highlightedCreatorId={highlightedCreatorId}
                   onRequestRowHighlight={requestRowHighlight}
                   onOpenSubmitTargets={() => setTargetsModalOpen(true)}
+                  onReorderBreakdown={handleReorderBreakdown}
+                  onReorderCreatorRows={handleReorderCreatorRows}
                 />
               </div>
             </>
@@ -527,6 +596,9 @@ function CreatorDashboardInner({
             onOpenChange={setOverviewOpen}
             monthKey={selectedMonth}
             campaignOptions={projects.map((p) => ({ id: p.id, name: p.name }))}
+            targets={targets}
+            creators={creators}
+            projects={projects}
             supabase={supabaseForm}
             tableTotal={totalRow}
             tableTotalPreviousMonth={totalRowPreviousMonth}
@@ -539,6 +611,9 @@ function CreatorDashboardInner({
             onOpenChange={setWeeklyProgressOpen}
             monthKey={selectedMonth}
             campaignOptions={projects.map((p) => ({ id: p.id, name: p.name }))}
+            targets={targets}
+            creators={creators}
+            projects={projects}
             supabase={supabaseForm}
           />
 
@@ -616,9 +691,51 @@ function CreatorDashboardInner({
             </DialogContent>
           </Dialog>
 
+          <Dialog
+            open={deleteBreakdownRowConfirm !== null}
+            onOpenChange={(open) => {
+              if (!open) setDeleteBreakdownRowConfirm(null);
+            }}
+          >
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Hapus baris campaign ini?</DialogTitle>
+                <DialogDescription>
+                  Target{" "}
+                  <strong className="font-semibold text-foreground/90">
+                    {deleteBreakdownRowConfirm?.projectName ?? "—"}
+                  </strong>{" "}
+                  untuk{" "}
+                  <strong className="font-semibold text-foreground/90">
+                    {deleteBreakdownRowConfirm?.creatorName ?? "—"}
+                  </strong>{" "}
+                  akan dihapus permanen dari Supabase (satu baris target), tidak
+                  memengaruhi campaign lain milik creator yang sama.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter className="border-t border-white/10 pt-4 sm:justify-end sm:gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteBreakdownRowConfirm(null)}
+                  className="h-10 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-foreground transition hover:bg-white/[0.06]"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runConfirmedDeleteBreakdownTarget()}
+                  className="btn-press h-10 rounded-xl border border-red-400/35 bg-red-500/15 px-5 text-sm font-semibold text-red-200 transition hover:border-red-400/55 hover:bg-red-500/25"
+                >
+                  Hapus baris
+                </button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           <DataSettingsModal
             open={dataSettingsOpen}
             onOpenChange={setDataSettingsOpen}
+            settingsMonthKey={selectedMonth}
             stored={formSettingsStored}
             onPersist={persistFormSettings}
             organizations={organizations}
@@ -626,6 +743,7 @@ function CreatorDashboardInner({
             workspaceProjects={projects}
             workspaceCreators={creators}
             workspaceTiktok={tiktokAccounts}
+            workspaceLoading={loading}
             onSyncToSupabase={async (next) => {
               await syncStoredFormEntitiesToSupabase(supabaseForm, next);
               void logWorkspaceActivity(supabaseForm, {
@@ -642,7 +760,9 @@ function CreatorDashboardInner({
                 },
               });
             }}
-            onReload={reload}
+            onReload={async () => {
+              await reload();
+            }}
           />
 
           <WorkspaceActivityLogModal

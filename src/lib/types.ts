@@ -27,6 +27,8 @@ export interface Creator {
   creatorType: CreatorType;
   /** 0–50: porsi Hanindo dari ER; null/undefined = pakai default app (15%). */
   hanindoSharingPercent?: number | null;
+  /** Urutan baris agregat creator di PerformanceTable (`dashboard_sort_index` di DB). */
+  dashboardSortIndex?: number;
 }
 
 export interface Project {
@@ -56,8 +58,15 @@ export interface CreatorTarget {
   creatorType: CreatorType;
   tiktokAccountId: string;
   month: string;
+  /** Urutan tampilan di breakdown PerformanceTable (per creator + bulan). */
+  sortIndex: number;
   /** Dari kolom Table di Submit Targets: all | tnc | folo. */
   tableSegmentId: string;
+  /**
+   * Minggu laporan 0–3 (Week 1–4) untuk sinkron ke modal Weekly progress.
+   * Null = legacy / heuristik tanggal saat penyesuaian submit video.
+   */
+  progressWeekIndex: number | null;
   targetVideos: number;
   submittedVideos: number;
   /** URL TikTok per video disimpan; jika kosong, hitungan mengikuti `submittedVideos` saja. */

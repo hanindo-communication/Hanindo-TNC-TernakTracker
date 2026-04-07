@@ -10,6 +10,8 @@ export type WeeklyProgressRow = {
   campaignName: string;
   /** Workspace `projects.id` when chosen from dropdown; optional for old rows. */
   campaignProjectId?: string;
+  /** Jika diisi, baris ini disinkron dari `creator_targets.id` (kolom Week di tabel performa). */
+  linkedCreatorTargetId?: string;
   targetVideoSubmit: string;
   targetReqAnotherCreative: string;
   targetApplyCampaign: string;
@@ -195,6 +197,28 @@ function readCampaignProjectId(o: Record<string, unknown>): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
+function readLinkedCreatorTargetId(
+  o: Record<string, unknown>,
+): string | undefined {
+  const v = o.linkedCreatorTargetId;
+  if (typeof v !== "string") return undefined;
+  const t = v.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+/** Minggu untuk sinkron: eksplisit dari target, atau hari ini (zona laporan). */
+export function resolveWeeklyWeekForTarget(
+  monthKey: string,
+  t: { progressWeekIndex: number | null },
+): 0 | 1 | 2 | 3 {
+  const p = t.progressWeekIndex;
+  if (p !== null && p !== undefined && Number.isFinite(p)) {
+    const w = Math.floor(Number(p));
+    if (w >= 0 && w < WEEKS) return w as 0 | 1 | 2 | 3;
+  }
+  return weekIndexNowForTargetMonth(monthKey);
+}
+
 export function parseV2(raw: string | null): WeeklyProgressRow[] | null {
   if (!raw) return null;
   try {
@@ -213,12 +237,14 @@ export function parseV2(raw: string | null): WeeklyProgressRow[] | null {
         continue;
       }
       const id = typeof o.id === "string" && o.id ? o.id : makeRowId();
+      const linkedId = readLinkedCreatorTargetId(o);
       out.push({
         id,
         weekIndex,
         creatorName: String(o.creatorName ?? ""),
         campaignName: String(o.campaignName ?? ""),
         campaignProjectId: readCampaignProjectId(o),
+        ...(linkedId ? { linkedCreatorTargetId: linkedId } : {}),
         targetVideoSubmit: String(o.targetVideoSubmit ?? ""),
         targetReqAnotherCreative: String(o.targetReqAnotherCreative ?? ""),
         targetApplyCampaign: String(o.targetApplyCampaign ?? ""),

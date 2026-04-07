@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Check, X } from "lucide-react";
 import { toast } from "sonner";
@@ -13,7 +13,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { StoredFormEntities } from "@/lib/dashboard/form-settings-storage";
-import { mergeBrands, mergeCreators } from "@/lib/dashboard/merge-entities";
+import {
+  mergeBrands,
+  mergeCreators,
+  mergeProjects,
+  mergeTikTokAccounts,
+} from "@/lib/dashboard/merge-entities";
 import type {
   Brand,
   Creator,
@@ -25,7 +30,7 @@ import type {
 import { AppSelect } from "@/components/ui/app-select";
 import { Spinner } from "@/components/ui/spinner";
 import { CREATOR_TYPE_SELECT_OPTIONS } from "@/lib/dashboard/creator-type-options";
-import { cn } from "@/lib/utils";
+import { cn, labelMonth } from "@/lib/utils";
 import { formatSupabaseClientError } from "@/lib/supabase/format-client-error";
 import { normalizeBrandTableSegment } from "@/lib/dashboard/table-segments";
 
@@ -117,6 +122,8 @@ function CommittedTextInput({
 interface DataSettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Bulan dashboard (`YYYY-MM`); data settings disimpan per bulan ini. */
+  settingsMonthKey: string;
   stored: StoredFormEntities;
   onPersist: (next: StoredFormEntities) => void;
   organizations: Organization[];
@@ -124,6 +131,8 @@ interface DataSettingsModalProps {
   workspaceProjects: Project[];
   workspaceCreators: Creator[];
   workspaceTiktok: TikTokAccount[];
+  /** Saat true, draft belum diisi dari Supabase — tunggu sampai false. */
+  workspaceLoading?: boolean;
   onSyncToSupabase: (next: StoredFormEntities) => Promise<void>;
   onReload: () => Promise<void>;
 }
@@ -131,6 +140,7 @@ interface DataSettingsModalProps {
 export function DataSettingsModal({
   open,
   onOpenChange,
+  settingsMonthKey,
   stored,
   onPersist,
   organizations,
@@ -138,6 +148,7 @@ export function DataSettingsModal({
   workspaceProjects,
   workspaceCreators,
   workspaceTiktok,
+  workspaceLoading = false,
   onSyncToSupabase,
   onReload,
 }: DataSettingsModalProps) {
@@ -153,31 +164,40 @@ export function DataSettingsModal({
     };
   }, []);
 
-  useEffect(() => {
-    if (open) setDraft(stored);
-  }, [open, stored]);
-
-  const mergedBrands = useMemo(
-    () => mergeBrands(workspaceBrands, draft.brands),
-    [workspaceBrands, draft.brands],
-  );
-  const mergedCreators = useMemo(
-    () => mergeCreators(workspaceCreators, draft.creators),
-    [workspaceCreators, draft.creators],
-  );
-
-  const defaultOrgId = organizations[0]?.id ?? "";
-
-  const importFromWorkspace = () => {
+  /**
+   * Saat modal dibuka: isi draft = semua entitas workspace (Supabase) + override
+   * penyimpanan per bulan, sama seperti yang dipakai Submit Targets — bukan
+   * hanya snapshot localStorage yang sering cuma subset / warisan bulan lalu.
+   */
+  useLayoutEffect(() => {
+    if (!open || workspaceLoading) return;
     setDraft({
       v: 1,
-      brands: workspaceBrands.map((b) => normalizeBrandTableSegment({ ...b })),
-      projects: workspaceProjects.map((p) => ({ ...p })),
-      creators: workspaceCreators.map((c) => ({ ...c })),
-      tiktokAccounts: workspaceTiktok.map((t) => ({ ...t })),
+      brands: mergeBrands(workspaceBrands, stored.brands).map((b) =>
+        normalizeBrandTableSegment({ ...b }),
+      ),
+      projects: mergeProjects(workspaceProjects, stored.projects).map((p) => ({
+        ...p,
+      })),
+      creators: mergeCreators(workspaceCreators, stored.creators).map((c) => ({
+        ...c,
+      })),
+      tiktokAccounts: mergeTikTokAccounts(
+        workspaceTiktok,
+        stored.tiktokAccounts,
+      ).map((t) => ({ ...t })),
     });
-    toast.success("Draft diisi dari data workspace saat ini.");
-  };
+  }, [
+    open,
+    workspaceLoading,
+    workspaceBrands,
+    workspaceProjects,
+    workspaceCreators,
+    workspaceTiktok,
+    stored,
+  ]);
+
+  const defaultOrgId = organizations[0]?.id ?? "";
 
   const handleSave = async () => {
     flushSync(() => {
@@ -229,8 +249,16 @@ export function DataSettingsModal({
 
     setSaving(true);
     try {
-      onPersist(d);
-      await onSyncToSupabase(d);
+      /** Isi modal = sumber kebenaran; jangan merge lagi ke workspace (supaya hapus baris tetap hilang). */
+      const toSave: StoredFormEntities = {
+        v: 1,
+        brands: d.brands.map((b) => normalizeBrandTableSegment({ ...b })),
+        projects: d.projects.map((p) => ({ ...p })),
+        creators: d.creators.map((c) => ({ ...c })),
+        tiktokAccounts: d.tiktokAccounts.map((t) => ({ ...t })),
+      };
+      onPersist(toSave);
+      await onSyncToSupabase(toSave);
       await onReload();
       toast.success("Data settings tersimpan & disinkron ke workspace.");
       onOpenChange(false);
@@ -253,25 +281,23 @@ export function DataSettingsModal({
           {saving ? "Menyimpan data settings dan sinkron ke workspace…" : ""}
         </p>
         <DialogHeader className="shrink-0 border-b border-white/10 px-5 py-4 sm:px-6">
-          <DialogTitle className="text-lg">Data settings</DialogTitle>
+          <DialogTitle className="text-lg">
+            Data settings — {labelMonth(settingsMonthKey)}
+          </DialogTitle>
           <DialogDescription className="text-sm text-muted">
-            Kelola daftar brand, campaign, creator, dan akun TikTok untuk form{" "}
-            <span className="text-foreground/90">Submit Targets</span>. Perubahan
-            disimpan di browser lalu di-push ke workspace bersama (Supabase).
+            Daftar brand, campaign, creator, dan TikTok di sini diselaraskan dengan{" "}
+            <span className="text-foreground/90">data workspace (Supabase)</span>{" "}
+            untuk bulan{" "}
+            <span className="text-foreground/90">{labelMonth(settingsMonthKey)}</span>
+            , ditambah penyesuaian yang pernah Anda simpan untuk bulan itu — sama
+            cakupnya dengan yang dipakai{" "}
+            <span className="text-foreground/90">Submit Targets</span>. Klik{" "}
+            <span className="text-foreground/90">Simpan &amp; sinkron</span>{" "}
+            untuk mem-push perubahan ke tim.
           </DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">
-          <div className="mb-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={importFromWorkspace}
-              className="rounded-lg border border-white/15 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-foreground transition hover:border-neon-cyan/40"
-            >
-              Ambil dari workspace saat ini
-            </button>
-          </div>
-
           <section className="mb-6">
             <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
               Brands
@@ -361,7 +387,7 @@ export function DataSettingsModal({
                       setDraft({ ...draft, projects: next });
                     }}
                     emptyLabel="Brand…"
-                    options={mergedBrands.map((br) => ({
+                    options={draft.brands.map((br) => ({
                       value: br.id,
                       label: br.name,
                     }))}
@@ -391,7 +417,7 @@ export function DataSettingsModal({
                       {
                         id: crypto.randomUUID(),
                         name: "",
-                        brandId: mergedBrands[0]?.id ?? "",
+                        brandId: draft.brands[0]?.id ?? "",
                         organizationId: defaultOrgId,
                       },
                     ],
@@ -524,7 +550,7 @@ export function DataSettingsModal({
                       setDraft({ ...draft, tiktokAccounts: next });
                     }}
                     emptyLabel="Creator…"
-                    options={mergedCreators.map((cr) => ({
+                    options={draft.creators.map((cr) => ({
                       value: cr.id,
                       label: cr.name,
                     }))}
@@ -555,7 +581,7 @@ export function DataSettingsModal({
                       ...draft.tiktokAccounts,
                       {
                         id: crypto.randomUUID(),
-                        creatorId: mergedCreators[0]?.id ?? "",
+                        creatorId: draft.creators[0]?.id ?? "",
                         label: "",
                       },
                     ],

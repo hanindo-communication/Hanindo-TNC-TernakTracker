@@ -7,13 +7,14 @@ import {
 import type { Creator, CreatorTarget, Project } from "@/lib/types";
 import {
   emptyRow,
+  ensureWeekCoverage,
   insertRowInWeek,
   loadRowsFromStorage,
   parseSubmittedVideoCount,
   parseV2,
+  resolveWeeklyWeekForTarget,
   saveRowsToLocalStorage,
   type WeeklyProgressRow,
-  weekIndexNowForTargetMonth,
 } from "./weekly-progress-storage";
 
 function plausibleUrlCount(t: CreatorTarget): number {
@@ -42,7 +43,7 @@ function rowMatchesTarget(
  */
 export function applyUrlCountDeltaToWeeklyRows(args: {
   rows: WeeklyProgressRow[];
-  targetMonthKey: string;
+  weekIndex: number;
   creatorName: string;
   projectId: string;
   campaignName: string;
@@ -51,7 +52,7 @@ export function applyUrlCountDeltaToWeeklyRows(args: {
 }): WeeklyProgressRow[] {
   const {
     rows,
-    targetMonthKey,
+    weekIndex,
     creatorName,
     projectId,
     campaignName,
@@ -59,7 +60,6 @@ export function applyUrlCountDeltaToWeeklyRows(args: {
   } = args;
   if (deltaPlausibleUrls === 0) return rows;
 
-  const weekIndex = weekIndexNowForTargetMonth(targetMonthKey);
   const inWeek = rows.filter(
     (r) =>
       r.weekIndex === weekIndex &&
@@ -97,6 +97,27 @@ export function plausibleUrlCountDelta(
   after: CreatorTarget,
 ): number {
   return plausibleUrlCount(after) - plausibleUrlCount(before);
+}
+
+function storedSubmittedVideos(t: CreatorTarget): number {
+  return Math.max(0, Math.floor(Number(t.submittedVideos)) || 0);
+}
+
+/**
+ * Delta yang harus diterapkan ke baris weekly (minggu berjalan) agar selaras dengan
+ * angka di meja performa (breakdown). Memakai `submittedVideos` bila berubah;
+ * jika hanya URL yang berubah sementara count tetap (mis. legacy tanpa URL lalu diisi link),
+ * memakai delta jumlah URL yang valid.
+ */
+export function weeklySubmittedSyncDelta(
+  before: CreatorTarget,
+  after: CreatorTarget,
+): number {
+  const countDelta = storedSubmittedVideos(after) - storedSubmittedVideos(before);
+  const urlDelta = plausibleUrlCountDelta(before, after);
+  if (countDelta !== 0) return countDelta;
+  if (urlDelta !== 0) return urlDelta;
+  return 0;
 }
 
 /**
@@ -138,17 +159,18 @@ export function syncWeeklyProgressAfterTargetVideoChange(args: {
     if (after.month !== monthKey) continue;
     const before = byIdBefore.get(after.id);
     if (!before) continue;
-    const delta = plausibleUrlCountDelta(before, after);
+    const delta = weeklySubmittedSyncDelta(before, after);
     if (delta === 0) continue;
 
     applied = true;
     const creatorName = creatorNameById.get(after.creatorId) ?? "";
     const campaignName =
       campaignNameByProjectId.get(after.projectId) ?? "";
+    const weekIndex = resolveWeeklyWeekForTarget(monthKey, after);
 
     rows = applyUrlCountDeltaToWeeklyRows({
       rows,
-      targetMonthKey: monthKey,
+      weekIndex,
       creatorName,
       projectId: after.projectId,
       campaignName,
@@ -174,13 +196,16 @@ export async function persistWeeklyProgressAfterTargetVideoEdits(
   for (const after of afterTargets) {
     const prevT = byIdBefore.get(after.id);
     if (!prevT) continue;
-    if (plausibleUrlCountDelta(prevT, after) !== 0) months.add(after.month);
+    if (weeklySubmittedSyncDelta(prevT, after) !== 0) months.add(after.month);
   }
   for (const monthKey of months) {
     const remoteDocJson = supabase
       ? await fetchWeeklyProgressDocument(supabase, monthKey)
       : null;
-    const merged = syncWeeklyProgressAfterTargetVideoChange({
+    const parsed = remoteDocJson ? parseV2(remoteDocJson) : null;
+    let baseRows: WeeklyProgressRow[] =
+      parsed ?? loadRowsFromStorage(monthKey);
+    const videoMerged = syncWeeklyProgressAfterTargetVideoChange({
       remoteDocJson,
       loadFromStorage: loadRowsFromStorage,
       monthKey,
@@ -189,13 +214,115 @@ export async function persistWeeklyProgressAfterTargetVideoEdits(
       creators: before.creators,
       projects: before.projects,
     });
-    if (!merged) continue;
-    saveRowsToLocalStorage(monthKey, merged);
+    if (videoMerged) baseRows = videoMerged;
+    const finalRows = reconcileWeeklyProgressRowsForTargets({
+      rows: baseRows,
+      monthKey,
+      targets: afterTargets,
+      creators: before.creators,
+      projects: before.projects,
+    });
+    saveRowsToLocalStorage(monthKey, finalRows);
     if (supabase) {
       await persistWeeklyProgressDocument(supabase, monthKey, {
         version: 2,
-        rows: merged,
+        rows: finalRows,
       });
     }
+  }
+}
+
+/**
+ * Sinkronkan baris weekly yang terhubung ke `creator_targets` (kolom Week / campaign).
+ * Baris dengan `linkedCreatorTargetId` yang tidak lagi ada di `targets` akan dihapus.
+ */
+export function reconcileWeeklyProgressRowsForTargets(args: {
+  rows: WeeklyProgressRow[];
+  monthKey: string;
+  targets: CreatorTarget[];
+  creators: Creator[];
+  projects: Project[];
+}): WeeklyProgressRow[] {
+  const { rows, monthKey, targets, creators, projects } = args;
+  let next = rows.filter((r) => {
+    if (!r.linkedCreatorTargetId) return true;
+    const t = targets.find((x) => x.id === r.linkedCreatorTargetId);
+    if (!t || t.month !== monthKey) return false;
+    return true;
+  });
+
+  const creatorNameById = new Map(creators.map((c) => [c.id, c.name]));
+  const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
+
+  for (const t of targets) {
+    if (t.month !== monthKey) continue;
+    const pw = t.progressWeekIndex;
+    const idx = next.findIndex((r) => r.linkedCreatorTargetId === t.id);
+
+    if (pw === null || pw === undefined || pw < 0 || pw >= 4) {
+      if (idx >= 0) next.splice(idx, 1);
+      continue;
+    }
+
+    const cn = (creatorNameById.get(t.creatorId) ?? "").trim();
+    const pn = (projectNameById.get(t.projectId) ?? "").trim();
+
+    if (idx >= 0) {
+      const old = next[idx];
+      next.splice(idx, 1);
+      next = insertRowInWeek(next, {
+        ...old,
+        weekIndex: pw,
+        creatorName: cn,
+        campaignProjectId: t.projectId,
+        campaignName: pn,
+        targetVideoSubmit: String(t.targetVideos),
+        submittedVideo: String(t.submittedVideos),
+        linkedCreatorTargetId: t.id,
+      });
+    } else {
+      next = insertRowInWeek(next, {
+        ...emptyRow(pw),
+        creatorName: cn,
+        campaignProjectId: t.projectId,
+        campaignName: pn,
+        targetVideoSubmit: String(t.targetVideos),
+        targetReqAnotherCreative: "",
+        targetApplyCampaign: "",
+        submittedVideo: String(t.submittedVideos),
+        linkedCreatorTargetId: t.id,
+      });
+    }
+  }
+
+  return ensureWeekCoverage(next);
+}
+
+/** Muat dokumen weekly + rekonsiliasi dengan target bulan itu; simpan lokal & Supabase. */
+export async function syncWeeklyProgressWithTargetsForMonth(
+  supabase: SupabaseClient | null,
+  monthKey: string,
+  targets: CreatorTarget[],
+  creators: Creator[],
+  projects: Project[],
+): Promise<void> {
+  const remoteDocJson = supabase
+    ? await fetchWeeklyProgressDocument(supabase, monthKey)
+    : null;
+  const parsed = remoteDocJson ? parseV2(remoteDocJson) : null;
+  const base = parsed ?? loadRowsFromStorage(monthKey);
+  const merged = reconcileWeeklyProgressRowsForTargets({
+    rows: base,
+    monthKey,
+    targets,
+    creators,
+    projects,
+  });
+  saveRowsToLocalStorage(monthKey, merged);
+  if (supabase) {
+    await persistWeeklyProgressDocument(supabase, monthKey, {
+      version: 2,
+      rows: merged,
+    });
   }
 }

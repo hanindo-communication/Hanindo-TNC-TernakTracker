@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   Check,
@@ -9,6 +9,7 @@ import {
   Loader2,
   PencilLine,
   Plus,
+  RotateCcw,
   Save,
   Trash2,
   X,
@@ -38,10 +39,15 @@ import {
   weekSubmittedTotals as computeWeekSubmittedTotals,
 } from "@/lib/dashboard/weekly-progress-chart-data";
 import {
+  applyWeeklyTargetsHydration,
+  hydrateWeeklyRowsSubmittedFromTargets,
+} from "@/lib/dashboard/weekly-progress-mirror-submitted";
+import {
   campaignLabelFromRow,
   defaultRows,
   duplicateRowFields,
   emptyRow,
+  ensureWeekCoverage,
   getWeekRangeLabelsInMonth,
   insertRowAfter,
   insertRowInWeek,
@@ -52,6 +58,7 @@ import {
   type WeeklyProgressRow,
   WEEKS,
 } from "@/lib/dashboard/weekly-progress-storage";
+import type { Creator, CreatorTarget, Project } from "@/lib/types";
 
 export type { WeeklyProgressRow };
 
@@ -69,6 +76,7 @@ const EMPTY_DRAFT: WeeklyProgressRow = {
   creatorName: "",
   campaignName: "",
   campaignProjectId: undefined,
+  linkedCreatorTargetId: undefined,
   targetVideoSubmit: "",
   targetReqAnotherCreative: "",
   targetApplyCampaign: "",
@@ -81,6 +89,10 @@ interface WeeklyProgressModalProps {
   monthKey: string;
   /** Daftar campaign workspace (sama seperti Data settings / Submit Targets). */
   campaignOptions: { id: string; name: string }[];
+  /** Untuk mirror kolom Submitted dari breakdown / `creator_targets`. */
+  targets: CreatorTarget[];
+  creators: Creator[];
+  projects: Project[];
   /** Bila diisi, data dimuat/disimpan ke Supabase (workspace bersama) selain localStorage. */
   supabase?: SupabaseClient | null;
 }
@@ -100,6 +112,9 @@ export function WeeklyProgressModal({
   onOpenChange,
   monthKey,
   campaignOptions,
+  targets,
+  creators,
+  projects,
   supabase = null,
 }: WeeklyProgressModalProps) {
   const reducedMotion = usePrefersReducedMotion();
@@ -131,11 +146,88 @@ export function WeeklyProgressModal({
     saveRowsToLocalStorage(monthKey, next);
   }, [monthKey]);
 
+  /**
+   * Selalu gunakan snapshot `targets` / entitas terbaru saat merge (mis. setelah fetch cloud selesai),
+   * tanpa mengikat ulang effect muat modal ke setiap perubahan targets — itu memicu refetch & reset baris.
+   * Kolom Submitted tetap mengikuti meja performa lewat `rowsLive` + ref ini saat merge.
+   */
+  const weeklyHydrateRef = useRef({
+    targets,
+    creators,
+    projects,
+    campaignOptions,
+    monthKey,
+  });
+  weeklyHydrateRef.current = {
+    targets,
+    creators,
+    projects,
+    campaignOptions,
+    monthKey,
+  };
+
+  const mergeLoadedIntoState = useCallback(
+    (base: WeeklyProgressRow[]) => {
+      const {
+        targets: t,
+        creators: c,
+        projects: p,
+        campaignOptions: co,
+        monthKey: mk,
+      } = weeklyHydrateRef.current;
+      const merged =
+        t.length > 0
+          ? applyWeeklyTargetsHydration({
+              rows: base,
+              monthKey: mk,
+              targets: t,
+              creators: c,
+              projects: p,
+              campaignOptions: co,
+            })
+          : base;
+      setRows(merged);
+      mirrorRowsToLocalStorage(merged);
+    },
+    [mirrorRowsToLocalStorage],
+  );
+
   const nameByProjectId = useMemo(() => {
     const m = new Map<string, string>();
     for (const o of campaignOptions) m.set(o.id, o.name);
     return m;
   }, [campaignOptions]);
+
+  const rowsLive = useMemo(
+    () =>
+      targets.length > 0
+        ? hydrateWeeklyRowsSubmittedFromTargets({
+            rows,
+            monthKey,
+            targets,
+            creators,
+            campaignOptions,
+          })
+        : rows,
+    [rows, monthKey, targets, creators, campaignOptions],
+  );
+
+  const draftSubmittedMirror = useMemo(() => {
+    if (!editingId || !targets.length) return "";
+    const snap: WeeklyProgressRow = {
+      ...draft,
+      id: draft.id || "draft",
+      weekIndex: draft.weekIndex,
+    };
+    const [one] = hydrateWeeklyRowsSubmittedFromTargets({
+      rows: [snap],
+      monthKey,
+      targets,
+      creators,
+      campaignOptions,
+    });
+    return one?.submittedVideo ?? "0";
+  }, [editingId, draft, monthKey, targets, creators, campaignOptions]);
 
   useEffect(() => {
     if (!open) return;
@@ -156,15 +248,14 @@ export function WeeklyProgressModal({
           setHasRemoteRow(doc !== null);
           const parsed = doc ? parseV2(doc) : null;
           if (parsed) {
-            setRows(parsed);
-            mirrorRowsToLocalStorage(parsed);
+            mergeLoadedIntoState(parsed);
             return;
           }
           if (doc !== null && !parsed) {
             toast.error(
               "Weekly progress di cloud rusak atau tidak dikenali. Data peramban tidak dipakai agar tidak tertukar.",
             );
-            setRows(defaultRows());
+            mergeLoadedIntoState(defaultRows());
             return;
           }
         } catch (e) {
@@ -179,10 +270,10 @@ export function WeeklyProgressModal({
           toast.error("Gagal memuat weekly progress dari cloud", {
             description: msg,
           });
-          if (!cancelled) setRows(loadRowsFromStorage(monthKey));
+          if (!cancelled) mergeLoadedIntoState(loadRowsFromStorage(monthKey));
           return;
         }
-        if (!cancelled) setRows(loadRowsFromStorage(monthKey));
+        if (!cancelled) mergeLoadedIntoState(loadRowsFromStorage(monthKey));
       })().finally(() => {
         if (!cancelled) setCloudHydrating(false);
       });
@@ -193,17 +284,27 @@ export function WeeklyProgressModal({
 
     setHasRemoteRow(null);
     setCloudHydrating(false);
-    setRows(loadRowsFromStorage(monthKey));
-  }, [open, monthKey, supabase, mirrorRowsToLocalStorage]);
+    mergeLoadedIntoState(loadRowsFromStorage(monthKey));
+  }, [open, monthKey, supabase, mergeLoadedIntoState]);
 
   const persist = useCallback(
     (next: WeeklyProgressRow[]) => {
-      setRows(next);
-      mirrorRowsToLocalStorage(next);
+      const merged =
+        targets.length > 0
+          ? hydrateWeeklyRowsSubmittedFromTargets({
+              rows: next,
+              monthKey,
+              targets,
+              creators,
+              campaignOptions,
+            })
+          : next;
+      setRows(merged);
+      mirrorRowsToLocalStorage(merged);
       if (supabase) {
         void persistWeeklyProgressDocument(supabase, monthKey, {
           version: 2,
-          rows: next,
+          rows: merged,
         }).catch((e) => {
           toast.error("Gagal simpan weekly progress ke cloud", {
             description: formatSupabaseClientError(e),
@@ -211,18 +312,43 @@ export function WeeklyProgressModal({
         });
       }
     },
-    [monthKey, supabase, mirrorRowsToLocalStorage],
+    [
+      monthKey,
+      supabase,
+      mirrorRowsToLocalStorage,
+      targets,
+      creators,
+      campaignOptions,
+    ],
   );
 
   const handleSaveAll = useCallback(async () => {
-    const next: WeeklyProgressRow[] =
+    const mergedEditing: WeeklyProgressRow[] =
       editingId !== null
         ? rows.map((r) =>
             r.id === editingId
-              ? { ...draft, id: r.id, weekIndex: r.weekIndex }
+              ? {
+                  ...draft,
+                  id: r.id,
+                  weekIndex: r.weekIndex,
+                  linkedCreatorTargetId: r.linkedCreatorTargetId,
+                  submittedVideo: r.submittedVideo,
+                }
               : r,
           )
         : rows;
+
+    const next: WeeklyProgressRow[] =
+      targets.length > 0
+        ? applyWeeklyTargetsHydration({
+            rows: mergedEditing,
+            monthKey,
+            targets,
+            creators,
+            projects,
+            campaignOptions,
+          })
+        : mergedEditing;
 
     setRows(next);
     mirrorRowsToLocalStorage(next);
@@ -247,8 +373,19 @@ export function WeeklyProgressModal({
       setHasRemoteRow(doc !== null);
       const parsed = doc ? parseV2(doc) : null;
       if (parsed) {
-        setRows(parsed);
-        mirrorRowsToLocalStorage(parsed);
+        const fixed =
+          targets.length > 0
+            ? applyWeeklyTargetsHydration({
+                rows: parsed,
+                monthKey,
+                targets,
+                creators,
+                projects,
+                campaignOptions,
+              })
+            : parsed;
+        setRows(fixed);
+        mirrorRowsToLocalStorage(fixed);
       }
       toast.success("Tersimpan & disinkronkan ke cloud", {
         description:
@@ -261,19 +398,30 @@ export function WeeklyProgressModal({
     } finally {
       setSavingAll(false);
     }
-  }, [rows, editingId, draft, monthKey, supabase, mirrorRowsToLocalStorage]);
+  }, [
+    rows,
+    editingId,
+    draft,
+    monthKey,
+    supabase,
+    mirrorRowsToLocalStorage,
+    targets,
+    creators,
+    projects,
+    campaignOptions,
+  ]);
 
   const rowsByWeek = useMemo(() => {
     const m = new Map<number, WeeklyProgressRow[]>();
     for (let w = 0; w < WEEKS; w++) m.set(w, []);
-    for (const r of rows) {
+    for (const r of rowsLive) {
       const w = r.weekIndex;
       if (w >= 0 && w < WEEKS) {
         m.get(w)!.push(r);
       }
     }
     return m;
-  }, [rows]);
+  }, [rowsLive]);
 
   const startEdit = (row: WeeklyProgressRow) => {
     let next = { ...row };
@@ -296,7 +444,15 @@ export function WeeklyProgressModal({
   const confirmEdit = () => {
     if (!editingId) return;
     const next = rows.map((r) =>
-      r.id === editingId ? { ...draft, id: r.id, weekIndex: r.weekIndex } : r,
+      r.id === editingId
+        ? {
+            ...draft,
+            id: r.id,
+            weekIndex: r.weekIndex,
+            linkedCreatorTargetId: r.linkedCreatorTargetId,
+            submittedVideo: r.submittedVideo,
+          }
+        : r,
     );
     persist(next);
     cancelEdit();
@@ -308,12 +464,23 @@ export function WeeklyProgressModal({
   };
 
   const removeRow = (id: string) => {
-    const row = rows.find((r) => r.id === id);
-    if (!row) return;
-    const sameWeek = rows.filter((r) => r.weekIndex === row.weekIndex);
-    if (sameWeek.length <= 1) return;
+    if (!rows.some((r) => r.id === id)) return;
     if (editingId === id) cancelEdit();
-    persist(rows.filter((r) => r.id !== id));
+    persist(ensureWeekCoverage(rows.filter((r) => r.id !== id)));
+  };
+
+  const confirmClearMonth = () => {
+    if (
+      !window.confirm(
+        "Kosongkan semua weekly progress untuk bulan ini? Empat minggu diisi ulang dengan baris kosong (cloud ikut diperbarui jika login).",
+      )
+    ) {
+      return;
+    }
+    persist(defaultRows());
+    toast.success("Weekly progress dikosongkan", {
+      description: `Bulan ${labelMonth(monthKey)} — silakan isi ulang atau sinkron dari tabel performa (kolom Week).`,
+    });
   };
 
   const duplicateRow = (id: string) => {
@@ -338,20 +505,20 @@ export function WeeklyProgressModal({
   );
 
   const weekSubmittedTotals = useMemo(
-    () => computeWeekSubmittedTotals(rows),
-    [rows],
+    () => computeWeekSubmittedTotals(rowsLive),
+    [rowsLive],
   );
 
   const { data: stackedChartData, campaignKeys: stackedChartCampaignKeys } =
     useMemo(
       () =>
         buildStackedSubmittedChartData(
-          rows,
+          rowsLive,
           chartWeekIndices,
           monthKey,
           nameByProjectId,
         ),
-      [rows, chartWeekIndices, monthKey, nameByProjectId],
+      [rowsLive, chartWeekIndices, monthKey, nameByProjectId],
     );
 
   const visibleWeekIndices = useMemo(
@@ -377,33 +544,46 @@ export function WeeklyProgressModal({
                   · {monthLabel}
                 </span>
               </DialogTitle>
-              <button
-                type="button"
-                onClick={() => void handleSaveAll()}
-                disabled={savingAll || cloudHydrating}
-                title={
-                  supabase
-                    ? "Simpan ke cloud lalu selaraskan tampilan dengan data terbaru di server"
-                    : undefined
-                }
-                className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-400/45 bg-emerald-500/20 px-3 text-sm font-semibold text-emerald-100 shadow-sm transition hover:bg-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:pointer-events-none disabled:opacity-60 sm:px-4"
-              >
-                {savingAll ? (
-                  <Loader2
-                    className="h-4 w-4 shrink-0 animate-spin"
-                    aria-hidden
-                  />
-                ) : (
-                  <Save className="h-4 w-4 shrink-0" aria-hidden />
-                )}
-                <span className="whitespace-nowrap">
-                  {savingAll
-                    ? supabase
-                      ? "Menyimpan & sinkron…"
-                      : "Menyimpan…"
-                    : "Simpan"}
-                </span>
-              </button>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={confirmClearMonth}
+                  disabled={savingAll || cloudHydrating}
+                  title="Hapus semua isian bulan ini dan isi ulang empat minggu dengan baris kosong"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/18 bg-white/[0.06] px-3 text-sm font-semibold text-foreground/90 transition hover:bg-white/[0.09] focus:outline-none focus:ring-2 focus:ring-white/25 disabled:pointer-events-none disabled:opacity-60"
+                >
+                  <RotateCcw className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="hidden sm:inline">Kosongkan bulan</span>
+                  <span className="sm:hidden">Reset</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveAll()}
+                  disabled={savingAll || cloudHydrating}
+                  title={
+                    supabase
+                      ? "Simpan ke cloud lalu selaraskan tampilan dengan data terbaru di server"
+                      : undefined
+                  }
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-400/45 bg-emerald-500/20 px-3 text-sm font-semibold text-emerald-100 shadow-sm transition hover:bg-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 disabled:pointer-events-none disabled:opacity-60 sm:px-4"
+                >
+                  {savingAll ? (
+                    <Loader2
+                      className="h-4 w-4 shrink-0 animate-spin"
+                      aria-hidden
+                    />
+                  ) : (
+                    <Save className="h-4 w-4 shrink-0" aria-hidden />
+                  )}
+                  <span className="whitespace-nowrap">
+                    {savingAll
+                      ? supabase
+                        ? "Menyimpan & sinkron…"
+                        : "Menyimpan…"
+                      : "Simpan"}
+                  </span>
+                </button>
+              </div>
             </div>
             <DialogDescription className="text-sm text-muted">
               <span className="font-medium text-foreground/85">{monthLabel}</span>
@@ -425,7 +605,7 @@ export function WeeklyProgressModal({
               Urutan dalam minggu sama bisa diubah dengan menyeret ikon grip di
               kiri baris.{" "}
               <span className="text-foreground/80">
-                Kolom <strong className="font-semibold">Submitted video</strong>{" "}
+                Kolom <strong className="font-semibold">Submitted</strong>{" "}
                 otomatis naik/turun mengikuti penambahan atau penghapusan URL
                 valid di tabel performa (minggu ditentukan dari tanggal hari ini,
                 zona Asia/Jakarta).
@@ -628,7 +808,7 @@ export function WeeklyProgressModal({
                             Target apply campaign
                           </th>
                           <th className="whitespace-nowrap px-2 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted sm:px-3">
-                            Submitted video
+                            Submitted
                           </th>
                           <th className="whitespace-nowrap px-2 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted sm:px-3">
                             Actions
@@ -638,7 +818,6 @@ export function WeeklyProgressModal({
                       <tbody>
                         {weekRows.map((row) => {
                           const isEditing = editingId === row.id;
-                          const canRemove = weekRows.length > 1;
                           const canDragReorder = editingId === null;
                           const isDragSource = dragRowId === row.id;
                           const isDragOver =
@@ -794,19 +973,10 @@ export function WeeklyProgressModal({
                                       aria-label={`Target apply campaign ${row.id}`}
                                     />
                                   </td>
-                                  <td className="px-2 py-1.5 sm:px-3">
-                                    <input
-                                      className={inputClass}
-                                      value={draft.submittedVideo}
-                                      onChange={(e) =>
-                                        setDraft((d) => ({
-                                          ...d,
-                                          submittedVideo: e.target.value,
-                                        }))
-                                      }
-                                      placeholder="e.g. 3"
-                                      aria-label={`Submitted ${row.id}`}
-                                    />
+                                  <td className="px-2 py-1.5 align-middle tabular-nums text-foreground/90 sm:px-3">
+                                    <span title="Dari meja performa (creator_targets); tidak bisa diedit di sini.">
+                                      {draftSubmittedMirror || "—"}
+                                    </span>
                                   </td>
                                   <td className="whitespace-nowrap px-2 py-1.5 align-middle sm:px-3">
                                     <div className="flex flex-wrap gap-1.5">
@@ -912,20 +1082,18 @@ export function WeeklyProgressModal({
                                         <Copy className="h-3.5 w-3.5" />
                                         Duplikat
                                       </button>
-                                      {canRemove ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => removeRow(row.id)}
-                                          disabled={
-                                            editingId !== null && editingId !== row.id
-                                          }
-                                          title="Hapus baris (minimal satu baris per minggu tetap ada)"
-                                          className="inline-flex h-8 items-center gap-1 rounded-lg border border-red-400/35 bg-red-500/10 px-2.5 text-xs font-semibold text-red-200/95 transition hover:bg-red-500/18 focus:outline-none focus:ring-2 focus:ring-red-400/35 disabled:pointer-events-none disabled:opacity-45"
-                                        >
-                                          <Trash2 className="h-3.5 w-3.5" />
-                                          Hapus
-                                        </button>
-                                      ) : null}
+                                      <button
+                                        type="button"
+                                        onClick={() => removeRow(row.id)}
+                                        disabled={
+                                          editingId !== null && editingId !== row.id
+                                        }
+                                        title="Hapus baris. Jika minggu jadi kosong, sistem menambah satu baris kosong otomatis."
+                                        className="inline-flex h-8 items-center gap-1 rounded-lg border border-red-400/35 bg-red-500/10 px-2.5 text-xs font-semibold text-red-200/95 transition hover:bg-red-500/18 focus:outline-none focus:ring-2 focus:ring-red-400/35 disabled:pointer-events-none disabled:opacity-45"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                        Hapus
+                                      </button>
                                     </div>
                                   </td>
                                 </>

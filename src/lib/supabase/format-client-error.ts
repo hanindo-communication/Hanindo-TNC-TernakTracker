@@ -75,6 +75,18 @@ export function formatSupabaseClientError(e: unknown): string {
   }
 
   if (
+    lower.includes("progress_week") &&
+    (lower.includes("does not exist") ||
+      lower.includes("column") ||
+      lower.includes("schema cache"))
+  ) {
+    return [
+      "Kolom creator_targets.progress_week belum ada (kolom Week di breakdown performa ↔ Weekly progress).",
+      "Supabase → SQL Editor: jalankan supabase/migrations/014_creator_targets_progress_week.sql lalu: NOTIFY pgrst, 'reload schema';",
+    ].join(" ");
+  }
+
+  if (
     lower.includes("submitted_video_urls") &&
     (lower.includes("does not exist") ||
       lower.includes("column") ||
