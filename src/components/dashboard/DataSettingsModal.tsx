@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { StoredFormEntities } from "@/lib/dashboard/form-settings-storage";
-import { mergeBrands, mergeCreators, mergeProjects } from "@/lib/dashboard/merge-entities";
+import { mergeBrands, mergeCreators } from "@/lib/dashboard/merge-entities";
 import type {
   Brand,
   Creator,
@@ -160,10 +160,6 @@ export function DataSettingsModal({
   const mergedBrands = useMemo(
     () => mergeBrands(workspaceBrands, draft.brands),
     [workspaceBrands, draft.brands],
-  );
-  const mergedProjects = useMemo(
-    () => mergeProjects(workspaceProjects, draft.projects),
-    [workspaceProjects, draft.projects],
   );
   const mergedCreators = useMemo(
     () => mergeCreators(workspaceCreators, draft.creators),
@@ -336,7 +332,7 @@ export function DataSettingsModal({
 
           <section className="mb-6">
             <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
-              Campaigns
+              Campaign name
             </h4>
             <div className="space-y-2">
               {draft.projects.map((p, i) => (

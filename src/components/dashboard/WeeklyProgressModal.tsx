@@ -28,272 +28,47 @@ import {
   formatSupabaseClientError,
   supabaseErrorDebugPayload,
 } from "@/lib/supabase/format-client-error";
-import { cn, labelMonth, parseMonthKey } from "@/lib/utils";
+import { cn, labelMonth } from "@/lib/utils";
+import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
+import { WeeklySubmittedInfographicChart } from "@/components/dashboard/WeeklySubmittedInfographicChart";
 import { toast } from "sonner";
+import { AppSelect } from "@/components/ui/app-select";
+import {
+  buildStackedSubmittedChartData,
+  weekSubmittedTotals as computeWeekSubmittedTotals,
+} from "@/lib/dashboard/weekly-progress-chart-data";
+import {
+  campaignLabelFromRow,
+  defaultRows,
+  duplicateRowFields,
+  emptyRow,
+  getWeekRangeLabelsInMonth,
+  insertRowAfter,
+  insertRowInWeek,
+  loadRowsFromStorage,
+  parseV2,
+  reorderWithinWeek,
+  saveRowsToLocalStorage,
+  type WeeklyProgressRow,
+  WEEKS,
+} from "@/lib/dashboard/weekly-progress-storage";
 
-const WEEKS = 4 as const;
+export type { WeeklyProgressRow };
+
 const WEEKLY_ROW_DRAG_TYPE = "application/tnc-weekly-row";
-
-export type WeeklyProgressRow = {
-  id: string;
-  weekIndex: number;
-  creatorName: string;
-  campaignName: string;
-  targetVideoSubmit: string;
-  targetReqAnotherCreative: string;
-  targetApplyCampaign: string;
-  submittedVideo: string;
-};
-
-function makeRowId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `row-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function emptyRow(weekIndex: number): WeeklyProgressRow {
-  return {
-    id: makeRowId(),
-    weekIndex,
-    creatorName: "",
-    campaignName: "",
-    targetVideoSubmit: "",
-    targetReqAnotherCreative: "",
-    targetApplyCampaign: "",
-    submittedVideo: "",
-  };
-}
 
 const inputClass =
   "h-9 w-full min-w-[6rem] rounded-lg border border-white/10 bg-white/[0.04] px-2.5 text-sm text-foreground outline-none transition placeholder:text-muted/60 focus:border-neon-cyan/55 focus:ring-2 focus:ring-neon-cyan/20";
 
-function storageKeyV2(monthKey: string) {
-  return `tnc-ternak-weekly-progress-v2:${monthKey}`;
-}
-
-/** Legacy key (8 baris tetap). */
-function storageKeyV1(monthKey: string) {
-  return `tnc-ternak-weekly-progress-v1:${monthKey}`;
-}
-
-function getWeekRangeLabelsInMonth(monthKey: string): string[] {
-  const d0 = parseMonthKey(monthKey);
-  const y = d0.getFullYear();
-  const m = d0.getMonth();
-  const lastDay = new Date(y, m + 1, 0).getDate();
-  const chunk = Math.ceil(lastDay / 4);
-  const monthShort = new Intl.DateTimeFormat("en-US", {
-    month: "short",
-  }).format(d0);
-
-  const labels: string[] = [];
-  for (let w = 0; w < 4; w++) {
-    const start = w * chunk + 1;
-    const end = Math.min(lastDay, (w + 1) * chunk);
-    labels.push(`${monthShort} ${start}–${end}`);
-  }
-  return labels;
-}
-
-type LegacyRowV1 = {
-  campaignName: string;
-  targetVideoSubmit: string;
-  targetReqAnotherCreative: string;
-  submittedVideo: string;
-};
-
-function parseV1(raw: string | null): LegacyRowV1[] | null {
-  if (!raw) return null;
-  try {
-    const data = JSON.parse(raw) as unknown;
-    if (!data || typeof data !== "object" || !("rows" in data)) return null;
-    const rows = (data as { rows: unknown }).rows;
-    if (!Array.isArray(rows) || rows.length !== 8) return null;
-    return rows.map((r) => {
-      const o = r as Record<string, unknown>;
-      return {
-        campaignName: String(o.campaignName ?? ""),
-        targetVideoSubmit: String(o.targetVideoSubmit ?? ""),
-        targetReqAnotherCreative: String(o.targetReqAnotherCreative ?? ""),
-        submittedVideo: String(o.submittedVideo ?? ""),
-      };
-    });
-  } catch {
-    return null;
-  }
-}
-
-function migrateV1ToV2(old: LegacyRowV1[]): WeeklyProgressRow[] {
-  return old.map((r, i) => ({
-    id: makeRowId(),
-    weekIndex: Math.min(3, Math.floor(i / 2)),
-    creatorName: "",
-    campaignName: r.campaignName,
-    targetVideoSubmit: r.targetVideoSubmit,
-    targetReqAnotherCreative: r.targetReqAnotherCreative,
-    targetApplyCampaign: "",
-    submittedVideo: r.submittedVideo,
-  }));
-}
-
-function parseV2(raw: string | null): WeeklyProgressRow[] | null {
-  if (!raw) return null;
-  try {
-    const data = JSON.parse(raw) as unknown;
-    if (!data || typeof data !== "object" || !("rows" in data)) return null;
-    const rows = (data as { rows: unknown }).rows;
-    if (!Array.isArray(rows)) return null;
-    if (rows.length === 0) {
-      return ensureWeekCoverage([]);
-    }
-    const out: WeeklyProgressRow[] = [];
-    for (const r of rows) {
-      const o = r as Record<string, unknown>;
-      const weekIndex = Number(o.weekIndex);
-      if (!Number.isFinite(weekIndex) || weekIndex < 0 || weekIndex > 3) {
-        continue;
-      }
-      const id = typeof o.id === "string" && o.id ? o.id : makeRowId();
-      out.push({
-        id,
-        weekIndex,
-        creatorName: String(o.creatorName ?? ""),
-        campaignName: String(o.campaignName ?? ""),
-        targetVideoSubmit: String(o.targetVideoSubmit ?? ""),
-        targetReqAnotherCreative: String(o.targetReqAnotherCreative ?? ""),
-        targetApplyCampaign: String(o.targetApplyCampaign ?? ""),
-        submittedVideo: String(o.submittedVideo ?? ""),
-      });
-    }
-    return ensureWeekCoverage(out);
-  } catch {
-    return null;
-  }
-}
-
-/** Pastikan minggu 0–3 punya minimal satu baris (normalisasi data rusak / impor). */
-function ensureWeekCoverage(rows: WeeklyProgressRow[]): WeeklyProgressRow[] {
-  const buckets: WeeklyProgressRow[][] = [[], [], [], []];
-  for (const r of rows) {
-    if (r.weekIndex >= 0 && r.weekIndex < WEEKS) {
-      buckets[r.weekIndex].push(r);
-    }
-  }
-  const next: WeeklyProgressRow[] = [];
-  for (let w = 0; w < WEEKS; w++) {
-    if (buckets[w].length === 0) next.push(emptyRow(w));
-    else next.push(...buckets[w]);
-  }
-  return next;
-}
-
-function defaultRows(): WeeklyProgressRow[] {
-  return [0, 1, 2, 3].map((w) => emptyRow(w));
-}
-
-function insertRowInWeek(
-  rows: WeeklyProgressRow[],
-  row: WeeklyProgressRow,
-): WeeklyProgressRow[] {
-  const w = row.weekIndex;
-  let insertAt = rows.length;
-  let lastIdx = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].weekIndex === w) lastIdx = i;
-    if (rows[i].weekIndex > w && insertAt === rows.length) insertAt = i;
-  }
-  if (lastIdx >= 0) insertAt = lastIdx + 1;
-  const copy = rows.slice();
-  copy.splice(insertAt, 0, row);
-  return copy;
-}
-
-function insertRowAfter(
-  rows: WeeklyProgressRow[],
-  afterId: string,
-  row: WeeklyProgressRow,
-): WeeklyProgressRow[] {
-  const idx = rows.findIndex((r) => r.id === afterId);
-  const copy = rows.slice();
-  if (idx < 0) return insertRowInWeek(copy, row);
-  copy.splice(idx + 1, 0, row);
-  return copy;
-}
-
-function duplicateRowFields(source: WeeklyProgressRow): WeeklyProgressRow {
-  return {
-    id: makeRowId(),
-    weekIndex: source.weekIndex,
-    creatorName: source.creatorName,
-    campaignName: source.campaignName,
-    targetVideoSubmit: source.targetVideoSubmit,
-    targetReqAnotherCreative: source.targetReqAnotherCreative,
-    targetApplyCampaign: source.targetApplyCampaign,
-    submittedVideo: source.submittedVideo,
-  };
-}
-
-/** Ubah urutan baris dalam satu minggu (indeks flat: minggu 0…3 berturut-turut). */
-function reorderWithinWeek(
-  rows: WeeklyProgressRow[],
-  weekIndex: number,
-  activeId: string,
-  overId: string,
-): WeeklyProgressRow[] {
-  if (activeId === overId) return rows;
-  const segments: WeeklyProgressRow[][] = [[], [], [], []];
-  for (const r of rows) {
-    if (r.weekIndex >= 0 && r.weekIndex < WEEKS) {
-      segments[r.weekIndex].push(r);
-    }
-  }
-  const seg = segments[weekIndex];
-  const fromI = seg.findIndex((r) => r.id === activeId);
-  const toI = seg.findIndex((r) => r.id === overId);
-  if (fromI < 0 || toI < 0) return rows;
-  const nextSeg = seg.slice();
-  const [moved] = nextSeg.splice(fromI, 1);
-  const insertAt = fromI < toI ? toI - 1 : toI;
-  nextSeg.splice(insertAt, 0, moved);
-  segments[weekIndex] = nextSeg;
-  return segments.flat();
-}
-
-function loadRowsFromStorage(monthKey: string): WeeklyProgressRow[] {
-  if (typeof window === "undefined") {
-    return defaultRows();
-  }
-  try {
-    const rawV2 = window.localStorage.getItem(storageKeyV2(monthKey));
-    const parsedV2 = parseV2(rawV2);
-    if (parsedV2) return parsedV2;
-
-    const rawV1 = window.localStorage.getItem(storageKeyV1(monthKey));
-    const parsedV1 = parseV1(rawV1);
-    if (parsedV1) {
-      const migrated = migrateV1ToV2(parsedV1);
-      try {
-        window.localStorage.setItem(
-          storageKeyV2(monthKey),
-          JSON.stringify({ version: 2, rows: migrated }),
-        );
-      } catch {
-        /* ignore */
-      }
-      return migrated;
-    }
-  } catch {
-    /* ignore */
-  }
-  return defaultRows();
-}
+const weeklyCampaignSelectClass =
+  "h-9 min-w-0 border-white/10 bg-white/[0.04] px-2 text-sm shadow-none hover:border-white/15 focus:border-neon-cyan/55 focus:ring-1 focus:ring-neon-cyan/25";
 
 const EMPTY_DRAFT: WeeklyProgressRow = {
   id: "",
   weekIndex: 0,
   creatorName: "",
   campaignName: "",
+  campaignProjectId: undefined,
   targetVideoSubmit: "",
   targetReqAnotherCreative: "",
   targetApplyCampaign: "",
@@ -304,17 +79,34 @@ interface WeeklyProgressModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   monthKey: string;
+  /** Daftar campaign workspace (sama seperti Data settings / Submit Targets). */
+  campaignOptions: { id: string; name: string }[];
   /** Bila diisi, data dimuat/disimpan ke Supabase (workspace bersama) selain localStorage. */
   supabase?: SupabaseClient | null;
+}
+
+function resolveCampaignProjectIdFromName(
+  campaignName: string,
+  options: { id: string; name: string }[],
+): string | undefined {
+  const t = campaignName.trim().toLowerCase();
+  if (!t) return undefined;
+  const hit = options.find((o) => o.name.trim().toLowerCase() === t);
+  return hit?.id;
 }
 
 export function WeeklyProgressModal({
   open,
   onOpenChange,
   monthKey,
+  campaignOptions,
   supabase = null,
 }: WeeklyProgressModalProps) {
+  const reducedMotion = usePrefersReducedMotion();
   const [rows, setRows] = useState<WeeklyProgressRow[]>(defaultRows);
+  const [weekTableFilter, setWeekTableFilter] = useState<
+    "all" | 0 | 1 | 2 | 3
+  >("all");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<WeeklyProgressRow>({ ...EMPTY_DRAFT });
   const [dragRowId, setDragRowId] = useState<string | null>(null);
@@ -331,19 +123,19 @@ export function WeeklyProgressModal({
       setHasRemoteRow(null);
       setCloudFetchError(null);
       setCloudHydrating(false);
+      setWeekTableFilter("all");
     }
   }, [open]);
 
   const mirrorRowsToLocalStorage = useCallback((next: WeeklyProgressRow[]) => {
-    try {
-      window.localStorage.setItem(
-        storageKeyV2(monthKey),
-        JSON.stringify({ version: 2, rows: next }),
-      );
-    } catch {
-      /* ignore */
-    }
+    saveRowsToLocalStorage(monthKey, next);
   }, [monthKey]);
+
+  const nameByProjectId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const o of campaignOptions) m.set(o.id, o.name);
+    return m;
+  }, [campaignOptions]);
 
   useEffect(() => {
     if (!open) return;
@@ -484,7 +276,15 @@ export function WeeklyProgressModal({
   }, [rows]);
 
   const startEdit = (row: WeeklyProgressRow) => {
-    setDraft({ ...row });
+    let next = { ...row };
+    if (!next.campaignProjectId?.trim() && next.campaignName.trim()) {
+      const pid = resolveCampaignProjectIdFromName(
+        next.campaignName,
+        campaignOptions,
+      );
+      if (pid) next = { ...next, campaignProjectId: pid };
+    }
+    setDraft(next);
     setEditingId(row.id);
   };
 
@@ -527,6 +327,39 @@ export function WeeklyProgressModal({
   const weekRangesInMonth = useMemo(
     () => getWeekRangeLabelsInMonth(monthKey),
     [monthKey],
+  );
+
+  const chartWeekIndices = useMemo(
+    () =>
+      weekTableFilter === "all"
+        ? [0, 1, 2, 3]
+        : [weekTableFilter],
+    [weekTableFilter],
+  );
+
+  const weekSubmittedTotals = useMemo(
+    () => computeWeekSubmittedTotals(rows),
+    [rows],
+  );
+
+  const { data: stackedChartData, campaignKeys: stackedChartCampaignKeys } =
+    useMemo(
+      () =>
+        buildStackedSubmittedChartData(
+          rows,
+          chartWeekIndices,
+          monthKey,
+          nameByProjectId,
+        ),
+      [rows, chartWeekIndices, monthKey, nameByProjectId],
+    );
+
+  const visibleWeekIndices = useMemo(
+    () =>
+      weekTableFilter === "all"
+        ? [0, 1, 2, 3]
+        : [weekTableFilter],
+    [weekTableFilter],
   );
 
   return (
@@ -590,7 +423,13 @@ export function WeeklyProgressModal({
                 ? " Satu tombol Simpan mengunggah ke Supabase dan menyelaraskan tampilan dengan data terbaru di server."
                 : ""}{" "}
               Urutan dalam minggu sama bisa diubah dengan menyeret ikon grip di
-              kiri baris.
+              kiri baris.{" "}
+              <span className="text-foreground/80">
+                Kolom <strong className="font-semibold">Submitted video</strong>{" "}
+                otomatis naik/turun mengikuti penambahan atau penghapusan URL
+                valid di tabel performa (minggu ditentukan dari tanggal hari ini,
+                zona Asia/Jakarta).
+              </span>
             </DialogDescription>
             {cloudFetchError ? (
               <div
@@ -645,7 +484,97 @@ export function WeeklyProgressModal({
             </div>
           ) : null}
           <div className="flex flex-col gap-8">
+            <div className="border-b border-white/10 pb-6">
+              <div className="flex flex-col gap-1">
+                <h2 className="text-base font-semibold text-foreground">
+                  Weekly progress — grafik
+                </h2>
+                <p className="text-xs leading-relaxed text-muted">
+                  Sumber data sama dengan isian tabel di modal ini untuk bulan{" "}
+                  <span className="font-medium text-foreground/85">
+                    {monthLabel}
+                  </span>{" "}
+                  (peramban
+                  {supabase ? " + cloud Supabase" : ""}).
+                </p>
+                <p className="pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
+                  Submitted video per minggu (bertumpuk per campaign)
+                </p>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWeekTableFilter("all")}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-neon-cyan/35",
+                    weekTableFilter === "all"
+                      ? "border-neon-cyan/45 bg-neon-cyan/15 text-neon-cyan"
+                      : "border-white/12 bg-white/[0.04] text-foreground/90 hover:border-white/18 hover:bg-white/[0.06]",
+                  )}
+                >
+                  Semua minggu
+                  <span className="font-mono text-[11px] font-normal text-muted">
+                    Σ{" "}
+                    {weekSubmittedTotals.reduce(
+                      (a, b) => a + b,
+                      0,
+                    )}
+                  </span>
+                </button>
+                {Array.from({ length: WEEKS }, (_, w) => {
+                  const total = weekSubmittedTotals[w] ?? 0;
+                  const active = weekTableFilter === w;
+                  const rangeLabel = weekRangesInMonth[w] ?? "";
+                  return (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() =>
+                        setWeekTableFilter(w as 0 | 1 | 2 | 3)
+                      }
+                      title={rangeLabel}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-neon-cyan/35",
+                        active
+                          ? "border-neon-cyan/45 bg-neon-cyan/15 text-neon-cyan"
+                          : "border-white/12 bg-white/[0.04] text-foreground/90 hover:border-white/18 hover:bg-white/[0.06]",
+                      )}
+                    >
+                      Week {w + 1}
+                      <span className="font-mono text-[11px] font-normal text-muted">
+                        · {total} submit
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="mt-3 text-[11px] text-muted">
+                Tombol minggu menyaring{" "}
+                <span className="font-medium text-foreground/80">
+                  tabel di bawah
+                </span>{" "}
+                sekaligus memfokuskan grafik ke minggu tersebut. Pilih{" "}
+                <span className="font-medium text-foreground/80">
+                  Semua minggu
+                </span>{" "}
+                untuk ringkasan empat minggu sekaligus.
+              </p>
+
+              <div className="mt-4">
+                <WeeklySubmittedInfographicChart
+                  data={stackedChartData}
+                  campaignKeys={stackedChartCampaignKeys}
+                  height={chartWeekIndices.length === 1 ? 200 : 220}
+                  reducedMotion={reducedMotion}
+                  ariaLabel={`Submitted video per minggu bertumpuk per campaign untuk ${monthLabel}`}
+                />
+              </div>
+            </div>
+
             {Array.from({ length: WEEKS }, (_, w) => {
+              if (!visibleWeekIndices.includes(w)) return null;
               const weekRows = rowsByWeek.get(w) ?? [];
               const rangeLabel = weekRangesInMonth[w] ?? "";
               return (
@@ -795,18 +724,31 @@ export function WeeklyProgressModal({
                                       aria-label={`Creator ${row.id}`}
                                     />
                                   </td>
-                                  <td className="px-2 py-1.5 sm:px-3">
-                                    <input
-                                      className={inputClass}
-                                      value={draft.campaignName}
-                                      onChange={(e) =>
+                                  <td className="min-w-[10rem] px-2 py-1.5 sm:px-3">
+                                    <AppSelect
+                                      className={cn(
+                                        weeklyCampaignSelectClass,
+                                        "w-full min-w-[8rem]",
+                                      )}
+                                      value={draft.campaignProjectId ?? ""}
+                                      onChange={(projectId) => {
+                                        const opt = campaignOptions.find(
+                                          (o) => o.id === projectId,
+                                        );
                                         setDraft((d) => ({
                                           ...d,
-                                          campaignName: e.target.value,
-                                        }))
-                                      }
-                                      placeholder="Campaign name"
-                                      aria-label={`Campaign ${row.id}`}
+                                          campaignProjectId:
+                                            projectId.trim().length > 0
+                                              ? projectId
+                                              : undefined,
+                                          campaignName: opt?.name ?? "",
+                                        }));
+                                      }}
+                                      emptyLabel="Campaign…"
+                                      options={campaignOptions.map((o) => ({
+                                        value: o.id,
+                                        label: o.name,
+                                      }))}
                                     />
                                   </td>
                                   <td className="px-2 py-1.5 sm:px-3">
@@ -930,7 +872,7 @@ export function WeeklyProgressModal({
                                   </td>
                                   <td className="max-w-[10rem] px-2 py-2 align-middle text-foreground/90 sm:px-3">
                                     <span className="line-clamp-2 break-words">
-                                      {row.campaignName || "—"}
+                                      {campaignLabelFromRow(row, nameByProjectId)}
                                     </span>
                                   </td>
                                   <td className="px-2 py-2 align-middle tabular-nums text-foreground/90 sm:px-3">

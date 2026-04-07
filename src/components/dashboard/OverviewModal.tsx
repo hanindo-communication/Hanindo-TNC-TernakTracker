@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,12 +12,31 @@ import {
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import type { TotalRow } from "@/hooks/useCreatorDashboard";
 import { MiniRevenueAreaChart } from "@/components/dashboard/MiniRevenueAreaChart";
+import { WeeklySubmittedInfographicChart } from "@/components/dashboard/WeeklySubmittedInfographicChart";
+import { fetchWeeklyProgressDocument } from "@/lib/dashboard/supabase-data";
+import {
+  buildStackedSubmittedChartData,
+  weekSubmittedTotals as computeWeekSubmittedTotals,
+} from "@/lib/dashboard/weekly-progress-chart-data";
+import {
+  loadRowsFromStorage,
+  parseV2,
+  type WeeklyProgressRow,
+} from "@/lib/dashboard/weekly-progress-storage";
+import {
+  formatSupabaseClientError,
+  supabaseErrorDebugPayload,
+} from "@/lib/supabase/format-client-error";
 import { cn, formatCurrency, labelMonth } from "@/lib/utils";
 
 interface OverviewModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   monthKey: string;
+  /** Sumber nama baris weekly (sama dengan workspace campaigns). */
+  campaignOptions: { id: string; name: string }[];
+  /** Untuk memuat weekly progress bersama; tanpa ini hanya localStorage. */
+  supabase?: SupabaseClient | null;
   /** Total footer tabel (filter header + chip segmen). */
   tableTotal: TotalRow | null;
   tableTotalPreviousMonth: TotalRow | null;
@@ -93,6 +113,130 @@ function monthOverMonthHintGeneric(
     line: `vs ${previousLabel}: turun ${Math.abs(pct).toFixed(1)}%.`,
     tone: "down",
   };
+}
+
+function OverviewWeeklyProgressSection({
+  open,
+  monthKey,
+  supabase,
+  campaignOptions,
+  reducedMotion,
+}: {
+  open: boolean;
+  monthKey: string;
+  supabase: SupabaseClient | null;
+  campaignOptions: { id: string; name: string }[];
+  reducedMotion: boolean;
+}) {
+  const [rows, setRows] = useState<WeeklyProgressRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [fetchErr, setFetchErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setRows(null);
+      setFetchErr(null);
+      return;
+    }
+    let cancelled = false;
+    setBusy(true);
+    setFetchErr(null);
+    void (async () => {
+      try {
+        const doc = supabase
+          ? await fetchWeeklyProgressDocument(supabase, monthKey)
+          : null;
+        const parsed = doc !== null ? parseV2(doc) : null;
+        const next = parsed ?? loadRowsFromStorage(monthKey);
+        if (!cancelled) setRows(next);
+      } catch (e) {
+        if (!cancelled) {
+          setFetchErr(formatSupabaseClientError(e));
+          if (process.env.NODE_ENV === "development") {
+            console.warn(
+              "[OverviewModal weekly]",
+              supabaseErrorDebugPayload(e),
+            );
+          }
+          setRows(loadRowsFromStorage(monthKey));
+        }
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, monthKey, supabase]);
+
+  const nameByProjectId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const o of campaignOptions) m.set(o.id, o.name);
+    return m;
+  }, [campaignOptions]);
+
+  const { data: stackedData, campaignKeys } = useMemo(() => {
+    if (!rows) return { data: [], campaignKeys: [] as string[] };
+    return buildStackedSubmittedChartData(
+      rows,
+      [0, 1, 2, 3],
+      monthKey,
+      nameByProjectId,
+    );
+  }, [rows, monthKey, nameByProjectId]);
+
+  const weekTotals = useMemo(
+    () => (rows ? computeWeekSubmittedTotals(rows) : [0, 0, 0, 0]),
+    [rows],
+  );
+
+  const sumWeek = weekTotals.reduce((a, b) => a + b, 0);
+
+  if (!open) return null;
+
+  return (
+    <div className="grid gap-3 border-b border-white/10 pb-4 pt-1">
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+          Weekly progress — submitted video
+        </p>
+        <p className="mt-1 text-xs text-muted">
+          Sumber: modal Weekly progress untuk{" "}
+          <span className="font-medium text-foreground/85">
+            {labelMonth(monthKey)}
+          </span>
+          {supabase ? " (peramban + cloud)." : " (peramban)."}
+        </p>
+      </div>
+      {busy || rows === null ? (
+        <p className="text-sm text-muted">Memuat data weekly…</p>
+      ) : (
+        <>
+          {fetchErr ? (
+            <p className="text-xs text-amber-300/90">
+              Cloud weekly tidak dimuat; menampilkan cache peramban.{" "}
+              <span className="text-muted">{fetchErr}</span>
+            </p>
+          ) : null}
+          <p className="text-xs font-medium text-foreground/90">
+            Total submitted (bulan ini):{" "}
+            <span className="tabular-nums text-neon-cyan">{sumWeek}</span>
+            <span className="ml-2 text-muted">
+              (W1: {weekTotals[0] ?? 0} · W2: {weekTotals[1] ?? 0} · W3:{" "}
+              {weekTotals[2] ?? 0} · W4: {weekTotals[3] ?? 0})
+            </span>
+          </p>
+          <WeeklySubmittedInfographicChart
+            data={stackedData}
+            campaignKeys={campaignKeys}
+            height={200}
+            reducedMotion={reducedMotion}
+            ariaLabel={`Submitted video per minggu per campaign untuk ${labelMonth(monthKey)}`}
+          />
+        </>
+      )}
+    </div>
+  );
 }
 
 function OverviewFigures({
@@ -250,6 +394,8 @@ export function OverviewModal({
   open,
   onOpenChange,
   monthKey,
+  campaignOptions,
+  supabase = null,
   tableTotal,
   tableTotalPreviousMonth,
   previousMonthKey,
@@ -259,7 +405,7 @@ export function OverviewModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md border-neon-cyan/20">
+      <DialogContent className="max-w-xl border-neon-cyan/20">
         <DialogHeader>
           <DialogTitle>Overview</DialogTitle>
           <DialogDescription>
@@ -267,22 +413,30 @@ export function OverviewModal({
             <span className="font-medium text-foreground">
               {labelMonth(monthKey)}
             </span>
-            . Ketiga angka utama menyamai{" "}
-            <span className="font-medium text-foreground">footer baris Total</span>{" "}
-            pada tabel performa — termasuk filter creator/brand di header dan{" "}
-            <span className="font-medium text-foreground">quick filter chip</span>{" "}
-            segmen meja.
+            : angka keuangan mengikuti{" "}
+            <span className="font-medium text-foreground">footer Total</span>{" "}
+            tabel (filter + chip segmen), dan grafik weekly mengikuti isian{" "}
+            <span className="font-medium text-foreground">Weekly progress</span>.
           </DialogDescription>
         </DialogHeader>
         {open ? (
-          <OverviewFigures
-            key={`${monthKey}-${tableTotal?.expectedRevenue ?? "empty"}`}
-            tableTotal={tableTotal}
-            tableTotalPreviousMonth={tableTotalPreviousMonth}
-            reducedMotion={reducedMotion}
-            previousMonthKey={previousMonthKey}
-            sparkline={sparkline}
-          />
+          <div className="grid gap-2">
+            <OverviewWeeklyProgressSection
+              open={open}
+              monthKey={monthKey}
+              supabase={supabase ?? null}
+              campaignOptions={campaignOptions}
+              reducedMotion={reducedMotion}
+            />
+            <OverviewFigures
+              key={`${monthKey}-${tableTotal?.expectedRevenue ?? "empty"}`}
+              tableTotal={tableTotal}
+              tableTotalPreviousMonth={tableTotalPreviousMonth}
+              reducedMotion={reducedMotion}
+              previousMonthKey={previousMonthKey}
+              sparkline={sparkline}
+            />
+          </div>
         ) : null}
       </DialogContent>
     </Dialog>

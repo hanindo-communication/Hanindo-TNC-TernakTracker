@@ -174,7 +174,6 @@ function CreatorDashboardInner({
     getCreatorExpectedRevenueSeries,
     seedIfEmpty,
     reload,
-    hanindoPercentByCreator,
   } = useCreatorDashboard({ actorEmail: userEmail ?? null });
 
   const { stored: formSettingsStored, persist: persistFormSettings } =
@@ -527,6 +526,8 @@ function CreatorDashboardInner({
             open={overviewOpen}
             onOpenChange={setOverviewOpen}
             monthKey={selectedMonth}
+            campaignOptions={projects.map((p) => ({ id: p.id, name: p.name }))}
+            supabase={supabaseForm}
             tableTotal={totalRow}
             tableTotalPreviousMonth={totalRowPreviousMonth}
             previousMonthKey={prevMonthKey}
@@ -537,6 +538,7 @@ function CreatorDashboardInner({
             open={weeklyProgressOpen}
             onOpenChange={setWeeklyProgressOpen}
             monthKey={selectedMonth}
+            campaignOptions={projects.map((p) => ({ id: p.id, name: p.name }))}
             supabase={supabaseForm}
           />
 

@@ -17,6 +17,7 @@ import {
   seedDemoData,
   type DashboardBundle,
 } from "@/lib/dashboard/supabase-data";
+import { persistWeeklyProgressAfterTargetVideoEdits } from "@/lib/dashboard/weekly-progress-sync-from-targets";
 import {
   appendSubmittedVideoUrls,
   applyTargetRowEdit,
@@ -671,6 +672,9 @@ export function useCreatorDashboard(options?: {
       }
       if (byId.size === 0) return;
 
+      const beforeBundle = bundleRef.current;
+      if (!beforeBundle) return;
+
       let nextTargets: CreatorTarget[] | undefined;
       setBundle((prev) => {
         if (!prev) return prev;
@@ -686,6 +690,21 @@ export function useCreatorDashboard(options?: {
 
       try {
         await persistTargets(supabase, nextTargets);
+        try {
+          await persistWeeklyProgressAfterTargetVideoEdits(
+            supabase,
+            {
+              targets: beforeBundle.targets,
+              creators: beforeBundle.creators,
+              projects: beforeBundle.projects,
+            },
+            nextTargets,
+          );
+        } catch (we) {
+          toast.error("Weekly progress tidak ikut tersinkron", {
+            description: formatSupabaseClientError(we),
+          });
+        }
         await load();
         void logWorkspaceActivity(supabase, {
           actorEmail: actorEmailRef.current,
@@ -704,6 +723,9 @@ export function useCreatorDashboard(options?: {
 
   const handleReplaceTargetVideoLinks = useCallback(
     async (targetId: string, urls: string[]) => {
+      const beforeBundle = bundleRef.current;
+      if (!beforeBundle) return;
+
       let nextTargets: CreatorTarget[] | undefined;
       setBundle((prev) => {
         if (!prev) return prev;
@@ -717,6 +739,21 @@ export function useCreatorDashboard(options?: {
 
       try {
         await persistTargets(supabase, nextTargets);
+        try {
+          await persistWeeklyProgressAfterTargetVideoEdits(
+            supabase,
+            {
+              targets: beforeBundle.targets,
+              creators: beforeBundle.creators,
+              projects: beforeBundle.projects,
+            },
+            nextTargets,
+          );
+        } catch (we) {
+          toast.error("Weekly progress tidak ikut tersinkron", {
+            description: formatSupabaseClientError(we),
+          });
+        }
         toast.success("Daftar link video disimpan");
         await load();
         void logWorkspaceActivity(supabase, {
